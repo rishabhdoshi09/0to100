@@ -370,8 +370,8 @@ def test_another_process_cannot_write_during_the_apply(tmp_path, damaged, monkey
         real_backup(*a, **k)
         seen.append(("after backup", _other_process_write(damaged)))
 
-    def reindex_then_probe(con):
-        real_reindex(con)
+    def reindex_then_probe(con, **kw):
+        real_reindex(con, **kw)
         seen.append(("after reindex", _other_process_write(damaged)))
 
     monkeypatch.setattr(sir, "_durable_backup", backup_then_probe)
@@ -461,7 +461,7 @@ def test_another_open_connection_refuses_the_apply(tmp_path, damaged):
 
 def test_a_crash_before_the_reindex_leaves_the_original_and_reapplies(tmp_path, damaged, monkeypatch):
     m = _plan(tmp_path, damaged)
-    monkeypatch.setattr(sir, "_reindex", lambda con: (_ for _ in ()).throw(KeyboardInterrupt("power cut")))
+    monkeypatch.setattr(sir, "_reindex", lambda con, **kw: (_ for _ in ()).throw(KeyboardInterrupt("power cut")))
     with pytest.raises(KeyboardInterrupt):
         sir.apply(tmp_path / "manifest.json", "words", target_is_copy=True)
     monkeypatch.undo()
@@ -476,7 +476,7 @@ def test_a_crash_before_the_reindex_leaves_the_original_and_reapplies(tmp_path, 
 def test_a_crash_inside_the_reindex_transaction_rolls_back(tmp_path, damaged, monkeypatch):
     m = _plan(tmp_path, damaged)
 
-    def crash_mid_transaction(con):
+    def crash_mid_transaction(con, **kw):
         con.execute("BEGIN EXCLUSIVE")
         con.execute("REINDEX")
         raise KeyboardInterrupt("power cut before COMMIT")
@@ -638,3 +638,22 @@ def test_the_runbook_stage3_copy_fails_on_a_mismatch(tmp_path):
     r = subprocess.run(["bash", "-eu", "-c", _as_written(block, logs)], capture_output=True, text=True,
                        env={**os.environ, "M": str(M), "R": str(logs)})
     assert r.returncode != 0 and "F1_BACKUP_MISMATCH" in (r.stdout + r.stderr)
+
+
+def test_already_applied_is_never_claimed_over_new_damage(tmp_path, damaged):
+    """GPT V2-02: the state proof carries the integrity result. A repaired ledger that
+    later shows damage only integrity_check sees (a wrong freelist count: rows, index
+    entries and lookups are unchanged, and the header bytes compared exclude it) must
+    not be reported as 'already applied'."""
+    import struct
+    _plan(tmp_path, damaged)
+    sir.apply(tmp_path / "manifest.json", "words", target_is_copy=True)
+    con = sqlite3.connect(damaged)
+    free = con.execute("PRAGMA freelist_count").fetchone()[0]
+    con.close()
+    with open(damaged, "r+b") as fh:
+        fh.seek(36)
+        fh.write(struct.pack(">I", free + 3))
+    assert any("Freelist" in m for m in _integrity(damaged))
+    with pytest.raises(SystemExit, match="neither the planned original nor the repaired"):
+        sir.apply(tmp_path / "manifest.json", "words", target_is_copy=True)

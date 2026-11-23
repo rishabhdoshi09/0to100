@@ -66,7 +66,6 @@ from product.bhav_store_rebuild import (
     _not_live,
     _on_live_volume,
     _sha256,
-    _write_manifest,
 )
 
 TOOL = "sqlite_index_repair"
@@ -276,32 +275,39 @@ def diagnose(path: str | Path) -> dict[str, Any]:
     path = Path(path)
     con = _open_ro(path)
     try:
-        integrity = [r[0] for r in con.execute("PRAGMA integrity_check(1000)")]
-        schema = [list(r) for r in con.execute(
-            "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")]
-        settings = {p: con.execute(f"PRAGMA {p}").fetchone()[0] for p in HEADER_PRAGMAS}
-        fk = sorted([list(r) for r in con.execute("PRAGMA foreign_key_check")], key=repr)
-        tables, unsupported = _tables(con)
-        digests: dict[str, Any] = {}
-        indexes: dict[str, Any] = {}
-        for t in tables:
-            alias = _rowid_alias(con, t)
-            if alias is None:
-                unsupported.append(f"table {t} (every rowid spelling is a column)")
-                continue
-            digests[t] = _row_digest(con, t, alias)
-            for _seq, name, unique, _origin, partial in con.execute(f"PRAGMA index_list({_q(t)})").fetchall():
-                cols = _index_columns(con, name)
-                if cols is None or partial:
-                    unsupported.append(f"index {name} ({'expression' if cols is None else 'partial'})")
-                    continue
-                checked = _index_check(con, t, alias, name, cols, bool(unique))
-                if checked is None:
-                    unsupported.append(f"index {name} (no covering scan)")
-                    continue
-                indexes[name] = checked
+        out = _diagnose_connection(con)
     finally:
         con.close()
+    out["header"] = _header(path)
+    return out
+
+
+def _diagnose_connection(con: sqlite3.Connection) -> dict[str, Any]:
+    """Everything but the file header, through ``con`` (also inside a transaction)."""
+    integrity = [r[0] for r in con.execute("PRAGMA integrity_check(1000)")]
+    schema = [list(r) for r in con.execute(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")]
+    settings = {p: con.execute(f"PRAGMA {p}").fetchone()[0] for p in HEADER_PRAGMAS}
+    fk = sorted([list(r) for r in con.execute("PRAGMA foreign_key_check")], key=repr)
+    tables, unsupported = _tables(con)
+    digests: dict[str, Any] = {}
+    indexes: dict[str, Any] = {}
+    for t in tables:
+        alias = _rowid_alias(con, t)
+        if alias is None:
+            unsupported.append(f"table {t} (every rowid spelling is a column)")
+            continue
+        digests[t] = _row_digest(con, t, alias)
+        for _seq, name, unique, _origin, partial in con.execute(f"PRAGMA index_list({_q(t)})").fetchall():
+            cols = _index_columns(con, name)
+            if cols is None or partial:
+                unsupported.append(f"index {name} ({'expression' if cols is None else 'partial'})")
+                continue
+            checked = _index_check(con, t, alias, name, cols, bool(unique))
+            if checked is None:
+                unsupported.append(f"index {name} (no covering scan)")
+                continue
+            indexes[name] = checked
     index_only = all(any(p.match(m) for p in INDEX_DAMAGE) for m in integrity) if integrity != ["ok"] else True
     return {
         "integrity": integrity,
@@ -310,7 +316,6 @@ def diagnose(path: str | Path) -> dict[str, Any]:
         "schema": schema,
         "schema_sha256": hashlib.sha256(json.dumps(schema).encode()).hexdigest(),
         "settings": settings,
-        "header": _header(path),
         "foreign_key_violations": fk[:_LIST_LIMIT],
         "foreign_key_violation_count": len(fk),
         "foreign_key_sha256": hashlib.sha256(json.dumps(fk, default=str).encode()).hexdigest(),
@@ -335,17 +340,24 @@ def _consistent(d: dict[str, Any]) -> bool:
     return d["integrity_ok"] and not (d["stale_total"] or d["missing_total"] or d["lookup_mismatch_total"])
 
 
-def _same_content(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    """Equal content, the schema cookie aside."""
-    strip = lambda c: {**c, "header": {k: v for k, v in c["header"].items() if k != SCHEMA_COOKIE}}
+def _same_content(a: dict[str, Any], b: dict[str, Any], *, ignore_header: bool = False) -> bool:
+    """Equal content, the schema cookie aside (the whole header too with ``ignore_header``)."""
+    def strip(c: dict[str, Any]) -> dict[str, Any]:
+        header = {} if ignore_header else {k: v for k, v in (c.get("header") or {}).items() if k != SCHEMA_COOKIE}
+        return {**c, "header": header}
     return strip(a) == strip(b)
 
 
 def _content(d: dict[str, Any]) -> dict[str, Any]:
-    """What a repair must preserve (tables) and what it produces (index entries)."""
-    return {"tables": d["tables"], "schema_sha256": d["schema_sha256"], "header": d["header"],
+    """The state proof: what a repair must preserve (tables, schema, settings, FKs) and
+    what it produces (index entries AND integrity: GPT V2-02, a sorted entry digest
+    alone cannot see an index whose entries are right but out of order)."""
+    return {"tables": d["tables"], "schema_sha256": d["schema_sha256"], "header": d.get("header") or {},
             "settings": d["settings"], "foreign_key_sha256": d["foreign_key_sha256"],
-            "index_digests": {n: i["entries_digest"] for n, i in d["indexes"].items()}}
+            "index_digests": {n: i["entries_digest"] for n, i in d["indexes"].items()},
+            "integrity": d["integrity"], "unsupported": sorted(d["unsupported"]),
+            "stale_total": d["stale_total"], "missing_total": d["missing_total"],
+            "lookup_mismatch_total": d["lookup_mismatch_total"]}
 
 
 # ── paths ────────────────────────────────────────────────────────────────────
@@ -368,19 +380,41 @@ def _check_target(target: Path) -> Path:
     return entry
 
 
+def _identity(p: Path) -> tuple[int, int] | None:
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _existing_chain(p: Path) -> list[Path]:
+    """``p`` resolved (symlinks followed), then each existing ancestor up to the root."""
+    p = Path(os.path.abspath(p))
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    p = p.resolve()
+    return [p, *p.parents]
+
+
 def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
-    """Outputs live on a disk the operator owns, away from the target's directory (GPT F1-04)."""
+    """Outputs live on a disk the operator owns, never in the database's directory.
+
+    Compared by FILESYSTEM IDENTITY up the resolved path, so a symlinked staging
+    directory or a differently cased spelling cannot reach it (GPT F1-04, V2-04).
+    """
     _not_live(staging, "staging")
     _not_live(out.parent, "the manifest")
-    target_dir = entry.parent
-    protected = {entry, *(Path(str(entry) + s) for s in ("-wal", "-shm", "-journal"))}
+    target_dir = _identity(entry.parent)
+    target_id = _identity(entry)
     for what, p in (("the manifest", out), ("staging", staging)):
-        resolved = Path(p).parent.resolve() / Path(p).name
-        # one rule: nothing in the database's directory (which also holds its sidecars)
-        if resolved == target_dir or target_dir in resolved.parents or resolved.parent == target_dir:
-            if resolved in protected or resolved.resolve() in protected:
-                raise SystemExit(f"refusing: {what} would overwrite the database or its journal")
-            raise SystemExit(f"refusing: {what} must not be in the database's directory ({target_dir})")
+        if target_id is not None and _identity(Path(p)) == target_id:
+            raise SystemExit(f"refusing: {what} would overwrite the database or its journal")
+        if Path(str(entry) + "-wal") == Path(p) or str(p).startswith(str(entry) + "-"):
+            raise SystemExit(f"refusing: {what} would overwrite the database or its journal")
+        chain = _existing_chain(Path(p) if what == "staging" else Path(p).parent)
+        if any(_identity(c) == target_dir for c in chain):
+            raise SystemExit(f"refusing: {what} must not be in the database's directory ({entry.parent})")
     if out.exists():
         try:
             prior = json.loads(out.read_text())
@@ -388,6 +422,28 @@ def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
             prior = None
         if not (isinstance(prior, dict) and prior.get("tool") == TOOL):
             raise SystemExit(f"refusing: {out} exists and is not a {TOOL} manifest")
+
+
+def _write_manifest(path: Path, m: dict[str, Any]) -> None:
+    """Durable manifest write through an EXCLUSIVELY created, no-follow temp file.
+
+    The shared writer opened a predictable ``<name>.tmp-<pid>`` with ``"w"``: a
+    symlink placed there truncated whatever it pointed at, the database included
+    (GPT V2-04). ``os.replace`` then swaps the directory entry, never its target.
+    """
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(m, indent=2, default=str))
+            fh.flush()
+            _full_fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    _fsync_dir(path.parent)
 
 
 # ── the repair routine (one code path for plan's copy and apply's live target) ──
@@ -415,10 +471,13 @@ def _checkpoint(con: sqlite3.Connection) -> None:
         raise SystemExit("refusing: the WAL could not be checkpointed (busy)")
 
 
-def _reindex(con: sqlite3.Connection) -> None:
+def _reindex(con: sqlite3.Connection, verify: Any = None) -> None:
+    """REINDEX in one transaction; ``verify(con)`` runs BEFORE COMMIT and aborts it by raising."""
     con.execute("BEGIN EXCLUSIVE")
     try:
         con.execute("REINDEX")
+        if verify is not None:
+            verify(con)
         con.execute("COMMIT")
     except BaseException:
         if con.in_transaction:
@@ -609,6 +668,34 @@ def _durable_backup(pin: _Pinned, backup: Path, expect_sha: str) -> None:
     _fsync_dir(backup.parent)                              # the backup is durable BEFORE the repair
 
 
+def _all_gates_pass(m: dict[str, Any]) -> bool:
+    """Every required gate AND every conditional one the plan recorded (expected_stale: GPT V2-06)."""
+    gates = m.get("gates") or {}
+    return (bool(m.get("ready")) and all(gates.get(g) is True for g in REQUIRED_GATES)
+            and all(v is True for v in gates.values()))
+
+
+def _precommit_verifier(m: dict[str, Any]):
+    """Proves the trial repair against the plan INSIDE the transaction, before COMMIT (GPT V2-06):
+    a mismatch rolls the transaction back, so nothing unproven is ever committed."""
+    expected = m["expected_content"]
+
+    def verify(con: sqlite3.Connection) -> None:
+        got = _content(_diagnose_connection(con))
+        if not _same_content(got, expected, ignore_header=True):
+            raise SystemExit("refusing: the trial repair does not match the plan's proof; "
+                             "the transaction was rolled back and nothing was committed")
+    return verify
+
+
+def _fresh_backup_path(target: Path, sha: str) -> Path:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    path = target.with_name(f"{target.name}.pre-reindex-{stamp}-{sha[:8]}")
+    while path.exists() or path.is_symlink():
+        path = target.with_name(f"{target.name}.pre-reindex-{stamp}-{sha[:8]}-{uuid.uuid4().hex[:6]}")
+    return path
+
+
 def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: bool = False) -> dict[str, Any]:
     manifest_path = Path(manifest_path)
     m = _load(manifest_path)
@@ -617,17 +704,24 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
     if m.get("state") not in {"planned", "applying", "applied", "rolled_back"}:
         # rolled_back: the plan's proof holds again once the original content is back
         raise SystemExit(f"refusing: the manifest is in state {m.get('state')!r}, not 'planned'")
-    gates = m.get("gates") or {}
-    if not (m.get("ready") and all(gates.get(g) is True for g in REQUIRED_GATES)):
-        raise SystemExit(f"refusing: the plan's gates did not all pass: {gates}")
+    if not _all_gates_pass(m):
+        raise SystemExit(f"refusing: the plan's gates did not all pass: {m.get('gates')}")
     target = _guards(m, target_is_copy)
     work = Path(m["work"])
+    # A recorded backup is checked HERE, before the lock: nothing a caller can name is
+    # opened while SQLite holds it, and a link to the live file is never a backup (GPT V2-03).
+    reuse = None
+    if m.get("backup"):
+        recorded = Path(m["backup"])
+        if recorded.is_file() and not recorded.is_symlink() and _identity(recorded) != _identity(target):
+            reuse = (recorded, _sha256(recorded))
     pin = _Pinned(target)
     try:
         con = _maintenance_connection(target)
     except BaseException:
         pin.close()
         raise
+    ok = False
     try:
         _checkpoint(con)
         if _hot(_sidecars(target)):
@@ -640,28 +734,46 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
         if not _same_content(content, m["original_content"]):
             raise SystemExit("refusing: the target is neither the planned original nor the repaired database "
                              "(it changed since the plan; re-plan)")
-        backup = Path(m["backup"]) if m.get("backup") else target.with_name(
-            f"{target.name}.pre-reindex-{time.strftime('%Y%m%d_%H%M%S')}")
-        if not (backup.is_file() and _sha256(backup) == sha):
-            if backup.exists():
-                backup = target.with_name(f"{target.name}.pre-reindex-{time.strftime('%Y%m%d_%H%M%S')}-{sha[:8]}")
+        if reuse is not None and reuse[1] == sha:
+            backup = reuse[0]
+        else:
+            backup = _fresh_backup_path(target, sha)
             _durable_backup(pin, backup, sha)                 # the exact bytes about to be repaired
         m.update({"state": "applying", "backup": str(backup), "backup_sha256": sha,
                   "owner_approval": owner_approval.strip(), "apply_started_at": _now()})
         _write_manifest(manifest_path, m)
-        _reindex(con)
+        _reindex(con, verify=_precommit_verifier(m))
         sha_after, content_after = _live_content(pin, work)
         ok = _same_content(content_after, m["expected_content"])
         m.update({"state": "applied" if ok else "applied_unverified", "applied_ok": ok,
-                  "applied_sha256": sha_after, "bytes_match_plan": sha_after == m["repaired_sha256"],
-                  "applied_at": _now()})
+                  "verified_before_commit": True, "applied_sha256": sha_after,
+                  "bytes_match_plan": sha_after == m["repaired_sha256"], "applied_at": _now()})
         _write_manifest(manifest_path, m)
     finally:
         con.close()
         pin.close()                                            # only after SQLite released its locks
     if not ok:
-        raise SystemExit("the repaired target does not match the plan's proof: run rollback")
+        raise SystemExit("the content was proven before COMMIT, but the committed file's header differs from "
+                         "the plan's (state applied_unverified): inspect with check; rollback accepts this state")
     return m
+
+
+def _verified_rollback_source(backup: Path, target: Path, work: Path, m: dict[str, Any]) -> Path:
+    """A PRIVATE snapshot of the backup, proven by sha256 AND by content to be the pre-repair
+    ledger before the live one is touched; the restore reads only this snapshot (GPT V2-01)."""
+    if _identity(backup) == _identity(target):
+        raise SystemExit("refusing: the backup is the live database itself")
+    snap = work / f"rollback-source-{uuid.uuid4().hex[:8]}.db"
+    sha = _quiet_copy(backup, snap)["sha256"]
+    try:
+        if sha not in {m["target_sha256"], m.get("backup_sha256")}:
+            raise SystemExit("refusing: the backup does not match the pre-repair sha256")
+        if not _same_content(_content(_diagnose_or_refuse(snap)), m["original_content"]):
+            raise SystemExit("refusing: the backup's content is not the pre-repair content")
+    except BaseException:
+        snap.unlink(missing_ok=True)
+        raise
+    return snap
 
 
 def rollback(manifest_path: str | Path, owner_approval: str = "", *, target_is_copy: bool = False,
@@ -678,44 +790,49 @@ def rollback(manifest_path: str | Path, owner_approval: str = "", *, target_is_c
     backup = Path(recorded) if recorded else None
     if backup is None or not backup.is_file():
         raise SystemExit("nothing to roll back: no backup recorded or found (pass --backup <verified copy>)")
-    if _sha256(backup) not in {m["target_sha256"], m.get("backup_sha256")}:
-        raise SystemExit("refusing: the backup does not match the pre-repair sha256")
     target = _guards(m, target_is_copy)
     work = Path(m["work"])
-    pin = _Pinned(target)
+    snap = _verified_rollback_source(backup, target, work, m)
     try:
-        con = _maintenance_connection(target)
-    except BaseException:
-        pin.close()
-        raise
-    try:
-        _checkpoint(con)
-        _sha, content = _live_content(pin, work)
-        if _same_content(content, m["original_content"]):
-            m.update({"state": "rolled_back", "rollback_ok": True, "rolled_back_at": _now()})
-            _write_manifest(manifest_path, m)
-            return m                                           # already the pre-repair database
-        if not _same_content(content, m["expected_content"]):
-            # in EVERY state: anything else holds writes made after the repair (GPT F1-02)
-            raise SystemExit("refusing: the target holds neither the repaired nor the original content "
-                             "(writes were made after the repair); rolling back would discard them")
-        m.update({"state": "rolling_back", "rollback_started_at": _now(),
-                  "rollback_approval": str(owner_approval or "").strip()})
-        _write_manifest(manifest_path, m)
-        src = _open_ro(backup)
+        pin = _Pinned(target)
         try:
-            src.backup(con)                                    # under the same exclusive lock
+            con = _maintenance_connection(target)
+        except BaseException:
+            pin.close()
+            raise
+        try:
+            _checkpoint(con)
+            _sha, content = _live_content(pin, work)
+            if _same_content(content, m["original_content"]):
+                m.update({"state": "rolled_back", "rollback_ok": True, "rolled_back_at": _now()})
+                _write_manifest(manifest_path, m)
+                return m                                       # already the pre-repair database
+            repaired = _same_content(content, m["expected_content"]) or (
+                m.get("state") == "applied_unverified"
+                and _same_content(content, m["expected_content"], ignore_header=True))
+            if not repaired:
+                # in EVERY state: anything else holds writes made after the repair (GPT F1-02)
+                raise SystemExit("refusing: the target holds neither the repaired nor the original content "
+                                 "(writes were made after the repair); rolling back would discard them")
+            m.update({"state": "rolling_back", "rollback_started_at": _now(),
+                      "rollback_approval": str(owner_approval or "").strip()})
+            _write_manifest(manifest_path, m)
+            src = _open_ro(snap)
+            try:
+                src.backup(con)                                # under the same exclusive lock
+            finally:
+                src.close()
+            _checkpoint(con)
+            _sha, restored = _live_content(pin, work)
+            ok = _same_content(restored, m["original_content"])
+            m.update({"state": "rolled_back" if ok else "rollback_unverified", "rollback_ok": ok,
+                      "rolled_back_at": _now()})
+            _write_manifest(manifest_path, m)
         finally:
-            src.close()
-        _checkpoint(con)
-        _sha, restored = _live_content(pin, work)
-        ok = _same_content(restored, m["original_content"])
-        m.update({"state": "rolled_back" if ok else "rollback_unverified", "rollback_ok": ok,
-                  "rolled_back_at": _now()})
-        _write_manifest(manifest_path, m)
+            con.close()
+            pin.close()
     finally:
-        con.close()
-        pin.close()
+        snap.unlink(missing_ok=True)
     if not ok:
         raise SystemExit("rollback did not restore the pre-repair content")
     return m

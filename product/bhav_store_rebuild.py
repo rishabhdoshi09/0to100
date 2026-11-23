@@ -109,7 +109,8 @@ def _on_live_volume(path: str | Path) -> bool:
     """Under /Volumes, compared case-insensitively: the Mac's volumes are
     case-insensitive and realpath keeps the spelling given, so '/volumes/...'
     reaches the same production files (cycle-7 review)."""
-    return str(path).lower().startswith("/volumes/")
+    text = str(path).lower().rstrip("/")
+    return text == "/volumes" or text.startswith("/volumes/")      # the mount root too (GPT V2-04)
 
 
 def _not_live(path: Path, what: str) -> Path:

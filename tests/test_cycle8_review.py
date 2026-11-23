@@ -318,9 +318,9 @@ def test_v2_a_writer_in_another_process_is_never_lost(f1, monkeypatch):
     real = repair._reindex
     outcome = []
 
-    def writer_then_reindex(con):
+    def writer_then_reindex(con, **kw):
         outcome.append(subprocess.run([sys.executable, "-c", code, str(db)], capture_output=True, text=True).stdout.strip())
-        real(con)
+        real(con, **kw)
 
     monkeypatch.setattr(repair, "_reindex", writer_then_reindex)
     repair.apply(manifest, "test", target_is_copy=True)
