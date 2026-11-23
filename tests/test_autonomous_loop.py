@@ -326,3 +326,40 @@ def test_official_settlement_preserves_a_concurrent_counterfactual_freeze(tmp_pa
     rows = {row["symbol"]: row for row in map(json.loads, path.read_text().splitlines())}
     assert rows["HAL"]["classification"] == "MISSED_WINNER"
     assert rows["TCS"]["classification"] is None
+
+
+def test_official_settlement_does_not_publish_effects_if_ledger_commit_fails(tmp_path, monkeypatch):
+    from core import atomic_io
+    from product import autonomous_loop as loop
+    from product import counterfactual_learning as cf
+    from tests.evidence_fixtures import rulebook_outcome
+
+    path = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(path))
+    monkeypatch.setattr(loop, "LEARNING_PATH", tmp_path / "learning.jsonl")
+    monkeypatch.setattr(CL, "DB_PATH", tmp_path / "candidates.db")
+    monkeypatch.setattr("product.forward_soak.settle_pending_from_market", lambda: {})
+    monkeypatch.setattr("core.outcome_resolver.counterfactual_outcome",
+                        lambda *a: rulebook_outcome(1.0, "WIN", 10.0))
+    cf.freeze_decision(symbol="HAL", reason_code="WAIT_FOR_ENTRY", decision="WAIT",
+                       entry=100, stop=90, target=120, as_of="2026-08-03")
+    candidate = CL.upsert(symbol="HAL", session_date="2026-08-03", state=CL.WAIT)
+    original = path.read_bytes()
+    write = atomic_io.atomic_write_text
+
+    def fail_ledger(target, *args, **kwargs):
+        if target == path:
+            raise OSError("ledger commit interrupted")
+        return write(target, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(atomic_io, "atomic_write_text", fail_ledger)
+        result = loop.settle_official_outcomes("2026-08-03")
+
+    assert result["n_settled"] == 0
+    assert result["failed"]
+    assert path.read_bytes() == original
+    assert CL.get(candidate["candidate_id"])["state"] == CL.WAIT
+    assert not loop.LEARNING_PATH.exists()
+    assert loop.settle_official_outcomes("2026-08-03")["n_settled"] == 1
+    assert CL.get(candidate["candidate_id"])["state"] == CL.CLOSED

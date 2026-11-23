@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -197,6 +198,25 @@ def upsert(
     row = dict(con.execute("SELECT * FROM candidates WHERE candidate_id=?", (cid,)).fetchone())
     con.close()
     return row
+
+
+def close_counterfactual(symbol: str, session_date: str, classification: str) -> None:
+    """Project a rejected decision outcome once, preserving real paper positions."""
+    cid = candidate_id(symbol, session_date)
+    with closing(_connect()) as con, con:
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute("SELECT state FROM candidates WHERE candidate_id=?", (cid,)).fetchone()
+        if row is None or _RANK[row["state"]] >= _RANK[ENTERED]:
+            return
+        now = _now()
+        con.execute(
+            "UPDATE candidates SET state=?, reason=?, updated_at=?, outcome_id=? WHERE candidate_id=?",
+            (CLOSED, classification, now, f"{cid}:outcome", cid),
+        )
+        con.execute(
+            "INSERT INTO transitions (candidate_id, from_state, to_state, reason, at, trigger) VALUES (?,?,?,?,?,?)",
+            (cid, row["state"], CLOSED, classification, now, "outcome"),
+        )
 
 
 def get(cid: str, path: Path | None = None) -> dict[str, Any] | None:

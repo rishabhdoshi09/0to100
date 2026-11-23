@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from uuid import uuid4
 
 from product import candidate_lifecycle as CL
 from product import readiness as RDY
@@ -533,6 +534,46 @@ def _consume_paper(
 _SETTLE_FLUSH_EVERY = 500
 
 
+def _publish_settlement_audit(events: list[dict[str, Any]]) -> None:
+    from core.atomic_io import atomic_write_text
+    from product.learning_observations import writer_lock
+
+    with writer_lock(LEARNING_PATH):
+        try:
+            text = LEARNING_PATH.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+        published = {
+            json.loads(line).get("settlement_event_id")
+            for line in text.split("\n") if line.strip()
+        }
+        additions = [event for event in events if event["settlement_event_id"] not in published]
+        if additions:
+            separator = "\n" if text and not text.endswith("\n") else ""
+            atomic_write_text(
+                LEARNING_PATH,
+                text + separator + "".join(json.dumps(event, default=str) + "\n" for event in additions),
+                durable=True,
+            )
+
+
+def _replay_settlement_effects(path: Path, rows: list[dict[str, Any]]) -> None:
+    from core.atomic_io import atomic_write_text
+
+    pending = [row for row in rows if "pending_settlement_audit" in row]
+    if not pending:
+        return
+    events = [row["pending_settlement_audit"] for row in pending]
+    _publish_settlement_audit(events)
+    for event in events:
+        CL.close_counterfactual(event["symbol"], event["as_of"], event["classification"])
+    for row in pending:
+        del row["pending_settlement_audit"]
+    atomic_write_text(
+        path, "".join(json.dumps(row, default=str) + "\n" for row in rows), durable=True,
+    )
+
+
 def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     """Resolve frozen REJECTED/WAITED decisions from official completed bars. No Kite.
 
@@ -546,6 +587,7 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     stamped on it first would block that real result forever, because the
     ledger settles a row once.
     """
+    from core.atomic_io import atomic_write_text
     from core.outcome_resolver import counterfactual_outcome
     from product.counterfactual_learning import classify_rulebook, locked_ledger
     # forward-ledger rows: settled below by the one owner (forward_soak), not here
@@ -604,7 +646,8 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
                     row, classification=classification, forward_return_pct=ret,
                 )
                 row["decision_quality"] = quality
-                _append_jsonl(LEARNING_PATH, {
+                row["pending_settlement_audit"] = {
+                    "settlement_event_id": uuid4().hex,
                     "at": _now(), "symbol": symbol, "as_of": day,
                     "classification": classification, "return_pct": ret,
                     "reason_code": row.get("reason_code"),
@@ -613,17 +656,15 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
                     "eval_spec": resolved.get("eval_spec"),
                     "updates_policy": False,
                     "observation": "counterfactual_settled",
-                })
-                cid = CL.candidate_id(symbol, day)
-                if CL.get(cid):
-                    CL.upsert(
-                        symbol=symbol, session_date=day, state=CL.CLOSED,
-                        reason=classification, outcome_id=f"{cid}:outcome", trigger="outcome",
-                    )
+                }
             if settled:
-                from core.atomic_io import atomic_write_text
-
-                atomic_write_text(path, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
+                atomic_write_text(
+                    path, "".join(json.dumps(r, default=str) + "\n" for r in rewritten), durable=True,
+                )
+            try:
+                _replay_settlement_effects(path, rewritten)
+            except Exception as exc:
+                failed.append({"stage": "counterfactual_effects", "error": str(exc)[:200]})
     except Exception as exc:
         settled.clear()
         failed.append({"error": str(exc)[:200]})
@@ -734,11 +775,14 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
     }
     _write_json(MEMORY_PATH, memory)
     if observations:
-        _append_jsonl(LEARNING_PATH, {
-            "at": _now(), "observation": "memory_refresh", "as_of": as_of,
-            "observations": observations, "updates_policy": False,
-            "provenance": "REAL_FORWARD_MARKET",
-        })
+        from product.learning_observations import writer_lock
+
+        with writer_lock(LEARNING_PATH):
+            _append_jsonl(LEARNING_PATH, {
+                "at": _now(), "observation": "memory_refresh", "as_of": as_of,
+                "observations": observations, "updates_policy": False,
+                "provenance": "REAL_FORWARD_MARKET",
+            })
     return memory
 
 
