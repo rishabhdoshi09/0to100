@@ -363,3 +363,50 @@ def test_official_settlement_does_not_publish_effects_if_ledger_commit_fails(tmp
     assert not loop.LEARNING_PATH.exists()
     assert loop.settle_official_outcomes("2026-08-03")["n_settled"] == 1
     assert CL.get(candidate["candidate_id"])["state"] == CL.CLOSED
+
+
+def test_candidate_refresh_cannot_overwrite_concurrent_settlement(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    monkeypatch.setattr(CL, "DB_PATH", tmp_path / "candidates.db")
+    cid = CL.upsert(symbol="HAL", session_date="2026-08-03", state=CL.WAIT)["candidate_id"]
+    connect = CL._connect
+    refresh_read = Event()
+    settlement_done = Event()
+
+    class InterleavedConnection:
+        def __init__(self, con):
+            self.con = con
+
+        def __getattr__(self, name):
+            return getattr(self.con, name)
+
+        def __enter__(self):
+            return self.con.__enter__()
+
+        def __exit__(self, *exc):
+            return self.con.__exit__(*exc)
+
+        def execute(self, sql, *args):
+            result = self.con.execute(sql, *args)
+            if sql == "SELECT * FROM candidates WHERE candidate_id=?" and not refresh_read.is_set():
+                refresh_read.set()
+                settlement_done.wait(timeout=1)
+            return result
+
+    monkeypatch.setattr(CL, "_connect", lambda path=None: InterleavedConnection(connect(path)))
+
+    def settle():
+        CL.close_counterfactual("HAL", "2026-08-03", "MISSED_WINNER")
+        settlement_done.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        refresh = pool.submit(CL.upsert, symbol="HAL", session_date="2026-08-03", state=CL.WAIT)
+        assert refresh_read.wait(timeout=10)
+        resolution = pool.submit(settle)
+        refresh.result(timeout=10)
+        resolution.result(timeout=10)
+
+    assert CL.get(cid)["state"] == CL.CLOSED
+    assert [t["to_state"] for t in CL.transitions_for(cid)] == [CL.WAIT, CL.CLOSED]

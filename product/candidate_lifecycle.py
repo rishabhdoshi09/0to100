@@ -129,75 +129,73 @@ def upsert(
 ) -> dict[str, Any]:
     cid = candidate_id(symbol, session_date)
     now = _now()
-    con = _connect(path)
-    prev = con.execute("SELECT * FROM candidates WHERE candidate_id=?", (cid,)).fetchone()
-    if prev is None:
-        con.execute(
-            """INSERT INTO candidates (
-                candidate_id, symbol, session_date, state, reason, first_seen_at, updated_at,
-                scan_run_id, recommendation_id, decision_id, paper_intent_id, outcome_id, payload_json,
-                decision, entry_state, execution_state, wait_trigger_json, opportunity_id
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                cid, str(symbol).upper(), str(session_date)[:10], state, reason, now, now,
-                scan_run_id, recommendation_id_value, decision_id_value, paper_intent_id,
-                outcome_id, json.dumps(dict(payload or {}), default=str),
-                decision, entry_state, execution_state,
-                json.dumps(dict(wait_trigger or {}), default=str),
-                opportunity_id_value or str(symbol).upper(),
-            ),
-        )
-        con.execute(
-            "INSERT INTO transitions (candidate_id, from_state, to_state, reason, at, trigger) VALUES (?,?,?,?,?,?)",
-            (cid, "", state, reason, now, trigger),
-        )
-    else:
-        merged = dict(prev)
-        next_state = state or merged["state"]
-        if not demote and _RANK.get(next_state, 0) < _RANK.get(merged["state"], 0):
-            next_state = merged["state"]
-        if next_state != merged["state"] or reason:
+    with closing(_connect(path)) as con, con:
+        con.execute("BEGIN IMMEDIATE")
+        prev = con.execute("SELECT * FROM candidates WHERE candidate_id=?", (cid,)).fetchone()
+        if prev is None:
+            con.execute(
+                """INSERT INTO candidates (
+                    candidate_id, symbol, session_date, state, reason, first_seen_at, updated_at,
+                    scan_run_id, recommendation_id, decision_id, paper_intent_id, outcome_id, payload_json,
+                    decision, entry_state, execution_state, wait_trigger_json, opportunity_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    cid, str(symbol).upper(), str(session_date)[:10], state, reason, now, now,
+                    scan_run_id, recommendation_id_value, decision_id_value, paper_intent_id,
+                    outcome_id, json.dumps(dict(payload or {}), default=str),
+                    decision, entry_state, execution_state,
+                    json.dumps(dict(wait_trigger or {}), default=str),
+                    opportunity_id_value or str(symbol).upper(),
+                ),
+            )
             con.execute(
                 "INSERT INTO transitions (candidate_id, from_state, to_state, reason, at, trigger) VALUES (?,?,?,?,?,?)",
-                (cid, merged["state"], next_state, reason or merged["reason"], now, trigger),
+                (cid, "", state, reason, now, trigger),
             )
-        body = dict(payload or {})
-        if merged.get("payload_json"):
-            try:
-                old = json.loads(merged["payload_json"])
-                if isinstance(old, dict):
-                    old.update(body)
-                    body = old
-            except Exception:
-                pass
-        con.execute(
-            """UPDATE candidates SET state=?, reason=?, updated_at=?,
-               scan_run_id=COALESCE(NULLIF(?, ''), scan_run_id),
-               recommendation_id=COALESCE(NULLIF(?, ''), recommendation_id),
-               decision_id=COALESCE(NULLIF(?, ''), decision_id),
-               paper_intent_id=COALESCE(NULLIF(?, ''), paper_intent_id),
-               outcome_id=COALESCE(NULLIF(?, ''), outcome_id),
-               decision=COALESCE(NULLIF(?, ''), decision),
-               entry_state=COALESCE(NULLIF(?, ''), entry_state),
-               execution_state=COALESCE(NULLIF(?, ''), execution_state),
-               wait_trigger_json=COALESCE(NULLIF(?, ''), wait_trigger_json),
-               opportunity_id=COALESCE(NULLIF(?, ''), opportunity_id),
-               payload_json=?
-               WHERE candidate_id=?""",
-            (
-                next_state, reason or merged["reason"], now,
-                scan_run_id, recommendation_id_value, decision_id_value,
-                paper_intent_id, outcome_id,
-                decision, entry_state, execution_state,
-                json.dumps(dict(wait_trigger or {}), default=str) if wait_trigger else "",
-                opportunity_id_value or str(symbol).upper(),
-                json.dumps(body, default=str), cid,
-            ),
-        )
-    con.commit()
-    row = dict(con.execute("SELECT * FROM candidates WHERE candidate_id=?", (cid,)).fetchone())
-    con.close()
-    return row
+        else:
+            merged = dict(prev)
+            next_state = state or merged["state"]
+            if not demote and _RANK.get(next_state, 0) < _RANK.get(merged["state"], 0):
+                next_state = merged["state"]
+            if next_state != merged["state"] or reason:
+                con.execute(
+                    "INSERT INTO transitions (candidate_id, from_state, to_state, reason, at, trigger) VALUES (?,?,?,?,?,?)",
+                    (cid, merged["state"], next_state, reason or merged["reason"], now, trigger),
+                )
+            body = dict(payload or {})
+            if merged.get("payload_json"):
+                try:
+                    old = json.loads(merged["payload_json"])
+                    if isinstance(old, dict):
+                        old.update(body)
+                        body = old
+                except Exception:
+                    pass
+            con.execute(
+                """UPDATE candidates SET state=?, reason=?, updated_at=?,
+                   scan_run_id=COALESCE(NULLIF(?, ''), scan_run_id),
+                   recommendation_id=COALESCE(NULLIF(?, ''), recommendation_id),
+                   decision_id=COALESCE(NULLIF(?, ''), decision_id),
+                   paper_intent_id=COALESCE(NULLIF(?, ''), paper_intent_id),
+                   outcome_id=COALESCE(NULLIF(?, ''), outcome_id),
+                   decision=COALESCE(NULLIF(?, ''), decision),
+                   entry_state=COALESCE(NULLIF(?, ''), entry_state),
+                   execution_state=COALESCE(NULLIF(?, ''), execution_state),
+                   wait_trigger_json=COALESCE(NULLIF(?, ''), wait_trigger_json),
+                   opportunity_id=COALESCE(NULLIF(?, ''), opportunity_id),
+                   payload_json=?
+                   WHERE candidate_id=?""",
+                (
+                    next_state, reason or merged["reason"], now,
+                    scan_run_id, recommendation_id_value, decision_id_value,
+                    paper_intent_id, outcome_id,
+                    decision, entry_state, execution_state,
+                    json.dumps(dict(wait_trigger or {}), default=str) if wait_trigger else "",
+                    opportunity_id_value or str(symbol).upper(),
+                    json.dumps(body, default=str), cid,
+                ),
+            )
+        return dict(con.execute("SELECT * FROM candidates WHERE candidate_id=?", (cid,)).fetchone())
 
 
 def close_counterfactual(symbol: str, session_date: str, classification: str) -> None:
