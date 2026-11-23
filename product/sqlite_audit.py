@@ -9,6 +9,13 @@ changing journal mode or writing recovery state.
 
 An immutable success is *not* proof that the live database is current when a
 WAL exists: immutable mode intentionally ignores uncheckpointed WAL content.
+
+The probe is the FULL ``PRAGMA integrity_check`` by default. ``quick_check``
+skips the comparison of index entries with table rows by design, so it reports
+``ok`` for a store whose index holds stale entries; that is exactly Stage 1
+finding F1 (22-23 Nov 2026: the decision-freeze ledger passed quick_check and
+was classified READONLY_OK). ``quick=True`` remains available for a fast pass
+and says what it cannot see.
 """
 from __future__ import annotations
 
@@ -24,11 +31,15 @@ from core.runtime_paths import logs_dir
 SQLITE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 
+QUICK_CHECK_LIMIT = "quick_check cannot see index entries that disagree with their tables (finding F1)"
+
+
 @dataclass(frozen=True)
 class Probe:
     ok: bool
     result: str
     error: str = ""
+    check: str = "integrity_check"
 
 
 @dataclass(frozen=True)
@@ -55,26 +66,36 @@ def _uri(path: Path, *, immutable: bool = False) -> str:
     return f"file:{encoded}?mode=ro{suffix}"
 
 
-def _quick_check(path: Path, *, immutable: bool = False) -> Probe:
+def _check(path: Path, *, immutable: bool = False, quick: bool = False) -> Probe:
+    pragma = "quick_check" if quick else "integrity_check"
     try:
         con = sqlite3.connect(_uri(path, immutable=immutable), uri=True, timeout=2.0)
     except Exception as exc:
-        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300])
+        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300], pragma)
     try:
         con.execute("PRAGMA query_only=ON")
-        row = con.execute("PRAGMA quick_check").fetchone()
-        result = str(row[0] if row else "")
-        return Probe(result.lower() == "ok", result, "")
+        rows = [str(r[0]) for r in con.execute(f"PRAGMA {pragma}(20)").fetchall()]
+        result = "; ".join(rows)[:1000]
+        return Probe(rows == ["ok"], result, "", pragma)
     except Exception as exc:
-        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300])
+        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300], pragma)
     finally:
         con.close()
 
 
-def classify(*, readonly_ok: bool, immutable_ok: bool, wal_present: bool) -> tuple[str, str]:
+def _quick_check(path: Path, *, immutable: bool = False) -> Probe:
+    """Kept for callers of the old name; it is the quick (index-blind) probe."""
+    return _check(path, immutable=immutable, quick=True)
+
+
+def classify(*, readonly_ok: bool, immutable_ok: bool, wal_present: bool,
+             check: str = "integrity_check") -> tuple[str, str]:
     """Classify probe results without overstating what immutable mode proves."""
     if readonly_ok:
-        return "READONLY_OK", "Read-only quick_check succeeded against SQLite's normal live view."
+        note = f"Read-only {check} succeeded against SQLite's normal live view."
+        if check == "quick_check":
+            note += " " + QUICK_CHECK_LIMIT + "."
+        return "READONLY_OK", note
     if immutable_ok and wal_present:
         return (
             "WAL_READONLY_SIDECAR_CONSTRAINT",
@@ -85,20 +106,20 @@ def classify(*, readonly_ok: bool, immutable_ok: bool, wal_present: bool) -> tup
     if immutable_ok:
         return (
             "READONLY_OPEN_CONSTRAINT",
-            "Normal read-only open failed but the immutable base file passed quick_check. "
+            f"Normal read-only open failed but the immutable base file passed {check}. "
             "The base file is readable; inspect permissions/path/locking before any repair.",
         )
     return (
         "BASE_FILE_UNREADABLE_OR_INTEGRITY_FAILURE",
-        "Neither normal read-only nor immutable base-file quick_check succeeded. "
+        f"Neither normal read-only nor immutable base-file {check} succeeded. "
         "This requires targeted investigation before the store is trusted or repaired.",
     )
 
 
-def audit_database(path: str | Path) -> DatabaseAudit:
+def audit_database(path: str | Path, *, quick: bool = False) -> DatabaseAudit:
     target = Path(path)
-    readonly = _quick_check(target, immutable=False)
-    immutable = _quick_check(target, immutable=True)
+    readonly = _check(target, immutable=False, quick=quick)
+    immutable = _check(target, immutable=True, quick=quick)
     wal = Path(str(target) + "-wal").exists()
     shm = Path(str(target) + "-shm").exists()
     journal = Path(str(target) + "-journal").exists()
@@ -106,6 +127,7 @@ def audit_database(path: str | Path) -> DatabaseAudit:
         readonly_ok=readonly.ok,
         immutable_ok=immutable.ok,
         wal_present=wal,
+        check=readonly.check,
     )
     try:
         size = int(target.stat().st_size)
@@ -134,8 +156,8 @@ def discover_databases(root: str | Path | None = None) -> list[Path]:
     )
 
 
-def audit_runtime(root: str | Path | None = None) -> list[DatabaseAudit]:
-    return [audit_database(path) for path in discover_databases(root)]
+def audit_runtime(root: str | Path | None = None, *, quick: bool = False) -> list[DatabaseAudit]:
+    return [audit_database(path, quick=quick) for path in discover_databases(root)]
 
 
 def summary(rows: Iterable[DatabaseAudit]) -> dict[str, object]:
@@ -143,8 +165,11 @@ def summary(rows: Iterable[DatabaseAudit]) -> dict[str, object]:
     counts: dict[str, int] = {}
     for row in items:
         counts[row.classification] = counts.get(row.classification, 0) + 1
+    checks = sorted({row.readonly.check for row in items})
     return {
         "databases": len(items),
+        "check": checks[0] if len(checks) == 1 else checks,
+        "limit": QUICK_CHECK_LIMIT if "quick_check" in checks else "",
         "classifications": counts,
         "needs_investigation": sum(
             1 for row in items

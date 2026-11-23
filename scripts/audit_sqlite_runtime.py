@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Print a non-destructive audit of every SQLite store under QuantTerm logs."""
+"""Print a non-destructive audit of every SQLite store under QuantTerm logs.
+
+Runs the full ``integrity_check`` by default (``--quick`` for quick_check, which
+cannot see stale index entries). Read-only; on the USB runtime the full check of
+every store takes minutes, so run it outside market hours.
+"""
 from __future__ import annotations
 
 import json
@@ -19,8 +24,13 @@ if str(_REPO_ROOT) not in sys.path:
 from product.sqlite_audit import audit_runtime, summary  # noqa: E402
 
 
-def main() -> int:
-    rows = audit_runtime()
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--quick", action="store_true",
+                    help="quick_check only: faster, but blind to index/table mismatches (finding F1)")
+    args = ap.parse_args(argv)
+    rows = audit_runtime(quick=args.quick)
     payload = {
         "summary": summary(rows),
         "databases": [row.as_dict() for row in rows],
