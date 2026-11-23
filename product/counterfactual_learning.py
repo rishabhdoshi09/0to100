@@ -118,20 +118,27 @@ def ledger_path(path: str | Path | None = None) -> Path:
     return DEFAULT_PATH
 
 
-def _read_ledger(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    out: list[dict[str, Any]] = []
+def _read_ledger(path: Path) -> tuple[list[dict[str, Any]], bool]:
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
+        with path.open(encoding="utf-8", newline="") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return [], False
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"invalid UTF-8 in counterfactual ledger {path}") from exc
+
+    rows = []
+    for number, line in enumerate(text.split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
             row = json.loads(line)
-            if isinstance(row, dict):
-                out.append(row)
-    except Exception:
-        return []
-    return out
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON in counterfactual ledger {path}, line {number}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"expected an object in counterfactual ledger {path}, line {number}")
+        rows.append(row)
+    return rows, bool(text and not text.endswith("\n"))
 
 
 def _counterfactual_freeze_path(path: str | Path | None) -> Path:
@@ -222,14 +229,19 @@ def freeze_decision(
         "classification": None,
         "not_pnl": True,
     }
+    from product.learning_observations import writer_lock
+
     target_path = ledger_path(path)
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    for existing in _read_ledger(target_path):
-        if counterfactual_id and str(existing.get("counterfactual_id") or "") == counterfactual_id:
-            return existing
-    with target_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, default=str) + "\n")
+    with writer_lock(target_path):
+        existing_rows, needs_separator = _read_ledger(target_path)
+        for existing in existing_rows:
+            if str(existing.get("counterfactual_id") or "") == counterfactual_id:
+                return existing
+        separator = "\n" if needs_separator else ""
+        with target_path.open("a", encoding="utf-8") as fh:
+            fh.write(separator + json.dumps(row, default=str) + "\n")
     return row
+
 
 def classify_forward(
     *,
