@@ -125,6 +125,44 @@ There is no further GPT loop this cycle.
 - **Platform-dependent audit tests.** A read-only open of a WAL file without `-shm` fails on CI's Linux SQLite and works on the Mac's.
 - **The power watch** polled once a minute and only alerted. It now polls every 5 s and flushes the runtime on battery (`83cbc862`).
 
+## 6c. The barrier's measured cost (23 Nov, 20:33 IST, after the close)
+
+**Setup.** A throwaway APFS sparsebundle (`QTBench`) on the Expansion USB disk: the production storage stack, never the WORKING or backup image. It was deleted afterwards. The desk was running its end-of-day catch-up at the time, so these are contended numbers. Script and results: `$M/bench_barrier.py`, `$M/bench_barrier.json`.
+
+| Operation | Without barrier | With barrier |
+|---|---|---|
+| Bare `F_FULLFSYNC` | n/a | median 43 ms (p90 52, max 108) |
+| Connection per write, as in `decision_freeze.freeze()` | median 2.2 ms | median 309 ms, p90 1,020 ms, max 1,596 ms (mean about 0.5 s) |
+| Persistent connection | median 0.1 ms | median 0.1 ms (max 358 ms when a checkpoint lands) |
+
+**Two earlier claims were wrong.**
+
+- The "~0.4 s per flush" in `make_sqlite_durable`'s docstring overstates the flush itself, which measures 43 ms.
+- The real cost is the connection-per-write pattern: every close checkpoints.
+
+**Volume.**
+
+- The counterfactual freeze store took 2,001 freezes on 11 Nov, 1,800 on 12 Nov, 1,297 on 18 Nov, and about 430–450 on ordinary days.
+- `decision_freeze.db` took 3,026 on 18 Nov.
+- So a heavy day reaches more than 4,000 freezes.
+
+At about 0.5 s each, that is roughly 4 minutes on a light day and 35 minutes on a heavy one. All of it falls in background scan and paper jobs, never the UI.
+
+**Decision: the barrier stays.** It is what keeps the decision ledgers from tearing, the F1 failure itself, and the cost is acceptable for paper trading.
+
+**Follow-up (next cycle, with review): a persistent per-thread connection for the freeze writers.** The measurement shows that makes the barrier essentially free (0.1 ms median). It changes the four freeze stores' connection lifecycle: the WAL would persist while the desk runs, and the stage-3b repair already refuses a hot WAL.
+
+## 6d. Host events after the close (23 Nov)
+
+| When (IST) | Event |
+|---|---|
+| 10:47 | The USB disk unmounted on battery; the desk failed closed until the lid was opened at 14:31 |
+| 15:10 | The battery reached 2%: Low Power Sleep, then AutoPowerOff until 20:23 |
+
+**The desk missed the close and the evening jobs.** After the wake the WORKING image was attached through a stale disk-image process (Errno 5). A plain `hdiutil detach` was done, as on 22 Nov. The supervisor re-attached the image within about 60 s, the desk returned at 20:28, and the end-of-day archive landed at 20:28.
+
+**Two more paper cycles were orphaned** (10:47 and 15:02). They were retired correctly as `ORPHANED_PAPER_CYCLE_RESTART`.
+
 ## 7. Verification
 
 - Targeted regression (140 files touching the changed stores): 139 passed. The 140th was the repair file, caught mid-rework; it passes now.
