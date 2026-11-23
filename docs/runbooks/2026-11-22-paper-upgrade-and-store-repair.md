@@ -184,6 +184,8 @@ cd $M/code && /Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair
 #   (a scan that freezes a new decision afterwards changes the target: stage 3b then refuses; re-plan)
 ```
 
+If it prints `"state": "nothing_to_repair"`, the ledger is healthy: skip the F1 copy in stage 3 and stage 3b.
+
 ## 3. Maintenance window **[OWNER: "start maintenance"]**: verify the backup, stop the desk, take verified backups (about 6 min before the stop, then about 6–15 min with the desk stopped)
 
 Run stages 3–6 in **one** Terminal session; they share these variables.
@@ -229,53 +231,73 @@ cp -p $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl
 shasum -a 256 $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl         # the pair must match
 for f in $M/backup/*.$TS; do echo "$f $(sqlite3 "$f" 'pragma integrity_check')"; done   # each prints ok
 ls $M/backup/*.$TS | wc -l                                                          # 7; any BACKUP FAILED stops the runbook
-# F1 only: a BYTE copy of the damaged freeze ledger (a .backup copy would fail integrity_check above, as the original does)
+```
+
+**F1 only, in the stage 3 SSD tier** (when stage 2 planned a repair). This is a BYTE copy of the damaged freeze ledger, verified against the plan. A `.backup` copy would fail `integrity_check` above, as the original does.
+
+```bash
 cp -p $R/product/counterfactuals.jsonl.freeze.db $M/backup/f1_freeze_pre_repair.db
-shasum -a 256 $M/backup/f1_freeze_pre_repair.db                                      # == target_sha256 in $M/f1_manifest.json
+want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.load(open(sys.argv[1]))['target_sha256'])" $M/f1_manifest.json)
+got=$(shasum -a 256 $M/backup/f1_freeze_pre_repair.db | cut -d' ' -f1)
+[ "$got" = "$want" ] || { echo "F1_BACKUP_MISMATCH: the ledger changed since the stage 2 plan; re-plan, skip 3b"; false; }
 ```
 
 If anything is still running after the stop, do not kill it blindly. Check its identity (ppid, cwd, user) as in §13.5 of the 8 Nov audit, and stop it cleanly. `apply` refuses on any match, and treats a failed probe as running.
 
 ## 3b. Repair the decision-freeze ledger's index **[OWNER: "repair freeze index"]** (optional; desk stopped; about 1 min)
 
-Finding F1: the power cut of 19 Nov left 4 stale primary-key entries (rowids 5684–5687) in `logs/product/counterfactuals.jsonl.freeze.db`. A lookup of a stale key returns another decision's row. The repair swaps in the copy that `plan` rebuilt with `REINDEX` and proved:
+**The finding (F1).** The lid-close sleep of 19 Nov left 4 stale primary-key entries (rowids 5684–5687) in `logs/product/counterfactuals.jsonl.freeze.db`. A lookup of a stale key returns another decision's row.
 
-- the rows are identical;
-- every index matches its table;
-- every unique key resolves to its own row;
-- the schema is unchanged.
+**How the repair works.** It is the `REINDEX` that `plan` proved on a copy, run IN PLACE on the live ledger, inside SQLite's own exclusive lock. No file is renamed or replaced. Under that one lock, `apply`:
 
-It is independent of stages 4–6. The repaired ledger is valid for `125880a6` and for the candidate, so neither rollback chain needs to undo it.
+1. checkpoints;
+2. verifies the ledger is byte-for-byte the planned one;
+3. writes a synced backup;
+4. records `applying`;
+5. runs the `REINDEX` in one transaction;
+6. proves the result against the plan's digests (rows, index entries, schema, header).
+
+A crash rolls the transaction back; re-running `apply` finishes or redoes the repair.
+
+**Independence.** It does not depend on stages 4–6. The repaired ledger is valid for `125880a6` and for the candidate, so neither rollback chain needs to undo it.
+
+**Apply**
 
 ```bash
 cd $M/code
 /Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair apply --manifest $M/f1_manifest.json \
-  --owner-approval "<the owner's words>"
-#   "state": "applied", "applied_ok": true; the original stays beside it as *.pre-reindex-<stamp>
-/Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair check \
+  --owner-approval "<the owner's words>" \
+  && /Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair check \
   --target $R/product/counterfactuals.jsonl.freeze.db --staging $M/f1_check
-#   exit 0: integrity ok, stale_total 0, missing_total 0
+#   "state": "applied", "applied_ok": true; then check exits 0 (integrity ok, stale_total 0)
+#   the original stays beside the ledger as *.pre-reindex-<stamp>
 ```
 
-**Before swapping, `apply` refuses each of these:**
+**Before touching the ledger, `apply` refuses each of these:**
 
 - no approval words;
 - a plan that is not ready;
-- a target or repaired copy whose sha256 changed since the plan;
-- a hot `-wal` or `-journal`;
 - a running or loaded desk;
-- an open handle.
+- an open handle;
+- any other SQLite connection;
+- a ledger whose content differs from the plan, including a committed write still in its WAL.
 
 Re-running it after success is a no-op.
 
-**Rollback** (on the owner's words). It restores the original bytes:
+**Rollback** (on the owner's words). It restores the original content through SQLite's backup API under the same exclusive lock, and only while the ledger holds exactly the repaired content. In every state it refuses anything else, so writes made after the repair are never discarded.
 
-- from a verified apply, only while the target still holds the repaired bytes;
-- from an interrupted apply, always.
+**Rollback from the recorded backup**
 
 ```bash
-/Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair rollback --manifest $M/f1_manifest.json \
-  --owner-approval "<the owner's words>" [--backup $M/backup/f1_freeze_pre_repair.db]
+cd $M/code && /Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair rollback \
+  --manifest $M/f1_manifest.json --owner-approval "<the owner's words>"
+```
+
+**Rollback from the stage 3 SSD copy** (when the recorded backup is gone)
+
+```bash
+cd $M/code && /Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair rollback \
+  --manifest $M/f1_manifest.json --owner-approval "<the owner's words>" --backup $M/backup/f1_freeze_pre_repair.db
 ```
 
 ## 4. Apply the store repair **[OWNER: "apply store repair"]** (about 3–5 min; only together with stage 6)

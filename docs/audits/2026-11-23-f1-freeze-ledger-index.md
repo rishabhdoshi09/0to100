@@ -41,60 +41,87 @@ So for stale index entries to point at rowids that newer rows occupy, earlier ro
 
 **Conclusion.** The tail of the 19 Nov batch was lost from both the ledger file and the table, and only index pages survived. Whether those 4 freezes had been acknowledged cannot be established, because the ledger's own tail was lost too. The data lost is 4 counterfactual WATCH decisions of 19 Nov. Nothing was traded on them.
 
-**The host's power log** (`pmset -g log`) shows five power events in five days:
+**Both losses happened seconds before a lid-close sleep** (`pmset -g log`):
+
+| Lost write (IST) | What followed |
+|---|---|
+| 16 Nov 10:19:59, NYKAA's ledger line | 10:21:23 clamshell sleep on battery (12%), **84 s later** |
+| 19 Nov 11:05:46–11:05:5x, APOLLOPIPE's ledger line and the 4 stale-key freezes | 11:06:05 charger removed; 11:06:26 clamshell sleep on battery, **about 30 s later** |
+
+**Corroboration.** The paper cycle that started at 11:03:04 on 19 Nov was found RUNNING by the next supervisor, and retired as `ORPHANED_PAPER_CYCLE_RESTART`. Lid-close sleep drops the USB runtime (see the host notes); writes still in the disk-image layer's cache were lost, and not in order.
+
+**Separate hazard: running out of battery.**
 
 | When (IST) | Event |
 |---|---|
-| 16 Nov 10:40 | Software shutdown (NYKAA's ledger row from 10:20 lost) |
 | 17 Nov 08:15 | Low Power Sleep at 7%, then AutoPowerOff until 10:31 |
-| 18 Nov 20:49 | Software shutdown |
-| **19 Nov 19:55** | **Low Power Sleep at 0%, then AutoPowerOff until 21:58 (wake on AC at 3%)** |
+| 19 Nov 19:55 | Low Power Sleep at 0%, then AutoPowerOff until 21:58 |
 | 20 Nov 10:38 | Clamshell sleep at 2%, then AutoPowerOff until 10:57 (the ledger's last write was 10:39:11) |
 
-**The storage stack.** The runtime is APFS inside a sparsebundle on an exFAT USB disk. Writes made hours earlier did not survive the cut: on 19 Nov the gap was about 9 h, on 16 Nov about 20 min. So acknowledged writes sat in a cache (the disk-image layer, or exFAT's unjournaled metadata) far longer than macOS's usual roughly 30 s write-back.
+After the 20 Nov wake the USB disk did not remount. The host entrypoint then failed its storage preflight (`external volume is not mounted: /Volumes/Expansion`) until 23:37. It fails closed, as designed; 18,885 such failures are in `launchd.err.log` across these events.
 
-**Why the barrier failed.** SQLite asks for a real flush only with `fullfsync` / `checkpoint_fullfsync`, and QuantTerm's shared connection policy set neither. A WAL checkpoint then has no barrier between writing pages into the database and re-using the WAL. A cut in that window persists some pages and loses others.
+**Why the order matters: every freeze is a checkpoint.**
 
-**Exactly which layer held the writes is inferred, not proven.** The power events and the losses are measured.
+- `decision_freeze.freeze()` opens and closes a connection per decision.
+- Closing the last connection to a WAL database checkpoints its pages into the database file and deletes the WAL.
+- SQLite issues a real flush (`F_FULLFSYNC`) only when `fullfsync` or `checkpoint_fullfsync` is set, and QuantTerm's shared connection policy set neither.
+- So the checkpoint's writes to the database and the deletion of the WAL could reach the disk in any order.
 
-## 3. Repair (prepared, not applied): `product/sqlite_index_repair.py`
+A drop in that window keeps some pages (the index page) and loses others (the table page), with the WAL already gone. That is F1.
 
-1. **`plan`** takes a stable byte copy: one read that also hashes it, and the source's size, mtime and ctime must not move. It runs `REINDEX` on a second copy and must prove all of the following:
+## 3. Repair (prepared, not applied): `product/sqlite_index_repair.py` (v2)
+
+The first version swapped in a repaired copy by rename. The cycle-8 GPT review showed this was unsafe (`docs/audits/2026-11-23-cycle8-checkpoint.md`); v2 repairs in place inside SQLite's own locking.
+
+1. **`plan`** works on a stable byte copy: one read through one descriptor, and the device, inode, size, mtime and ctime must not move, with no hot WAL or journal before or after. It runs the same repair routine `apply` runs on a second copy, and must prove all of the following:
    - the damage is index-only;
-   - the repaired copy passes `integrity_check`;
-   - every index holds exactly its table's (key, rowid) entries;
-   - every unique key resolves to its own row;
-   - every row is unchanged (rowids and a content digest of every column);
-   - the schema and header are unchanged.
-2. **`apply`** needs the owner's words and a stopped desk. It re-verifies both sha256s, refuses a hot WAL or journal and open handles, writes a synced backup first, records `swapping` durably, then swaps in one atomic rename and re-verifies.
-3. **`rollback`** needs words when the target is live. It recovers every interrupted state, and never discards writes made after a verified apply.
-4. **Idempotent:** a healthy database plans as `nothing_to_repair`, and re-applying is a no-op.
+   - `integrity_check` is ok;
+   - every index holds exactly its table's (key, rowid) entries, read through a scan SQLite reports as covering;
+   - every unique key resolves, with the index's own collation, to its own row;
+   - every row is unchanged, across every rowid table in SQLite's `table_list` (rowids through an unshadowed alias, plus a content digest);
+   - the schema, the header bytes `REINDEX` must not touch, and the full foreign-key list are unchanged.
+
+   Its outputs may never be in the database's directory, and symlinked targets are refused.
+2. **`apply`** needs the owner's words, a stopped desk, no open handle and no other SQLite connection. Then it:
+   - opens the ledger with `locking_mode=EXCLUSIVE`, so no other connection can read or write until it closes;
+   - checkpoints and verifies the content is the planned original;
+   - writes a synced backup;
+   - records `applying`;
+   - runs `REINDEX` in one transaction;
+   - checkpoints and proves the result against the plan's digests.
+
+   It never renames or replaces the file. Every byte read of the live file goes through one descriptor opened before SQLite and closed after it, because on POSIX closing any descriptor drops all of the process's locks. A crash rolls the transaction back; re-running finishes or redoes it, and after success it is a no-op.
+3. **`rollback`** restores the backup through SQLite's backup API under the same lock. It acts only while the ledger holds exactly the repaired content: in every state it refuses anything else, so writes made after the repair are never discarded.
 
 **On a copy of the production file** (23 Nov):
 
 - the plan is READY with all 11 gates true, including `expected_stale` 4;
-- 6,112 rows, with an identical digest (`78b016b8…`) before and after;
-- the repaired copy passes `integrity_check`;
-- all 6,110 ledger ids resolve to their own freeze (fingerprint and symbol match);
+- `apply` produced the byte-identical repaired file the plan proved (`bytes_match_plan`);
+- 6,112 rows, with an identical digest;
+- all 6,110 ledger ids resolve to their own freeze;
 - the 4 stale keys resolve to nothing;
-- deterministic: an independent second plan produced the byte-identical repaired file (`6cf24778…`).
+- rollback restores the original content, and re-apply works.
 
-**Tests** (`tests/test_sqlite_index_repair.py`) build F1's exact damage deterministically (`tests/sqlite_damage.py`). They cover:
+**Tests.** `tests/test_sqlite_index_repair.py` (48) and the reviewer's sketches in `tests/test_cycle8_review.py`. They cover:
 
 - the plan proofs;
-- refusals: table damage, non-index damage, a moving source, a hot WAL, a changed target or copy, a running desk, copy mode under `/Volumes`, missing words;
-- crashes before the swap, while recording `swapping` (no file left behind), and after the swap (recover, re-plan, re-apply);
-- rollback and its refusals;
-- the CLI;
-- the runbook's own commands, run as written.
+- every refusal;
+- a writer in another process held off through the backup, the repair and the verification;
+- crashes before the `REINDEX`, inside its transaction, and after its commit;
+- rollback never discarding newer writes;
+- the runbook's own commands, run as written, including a stage-3 copy that fails on a mismatch.
 
-Each guard, reverted on its own, fails a test (17 mutants).
+**Mutants.** 23 of 24 guards, reverted on its own, fail a test. The survivor is the covering-scan check: a scan of only the key columns plus an unshadowed rowid alias is always covering for an ordinary index, so it is a defensive fail-closed guard with no reachable case.
 
 ## 4. Prevention: checkpoint barriers (`core.atomic_io.make_sqlite_checkpoint_safe`)
 
 **What it sets.** On macOS, every WAL store now sets `checkpoint_fullfsync=ON`, and also `fullfsync=ON` where `synchronous` ≤ NORMAL.
 
-**What it costs.** In WAL mode with `synchronous=NORMAL`, commits never sync, so only checkpoints and the rare WAL-header sync pay a full flush. Stores at `synchronous=FULL` (SQLite's default, for example the job ledger) get only `checkpoint_fullfsync`, so their per-commit cost does not change. Commits that each pay a full flush remain the deliberate choice of `make_sqlite_durable` (the paper F&O book, OMS, protection).
+**What it costs.** One full flush per checkpoint.
+
+- **Persistent connections** (for example the job ledger): checkpoints are rare, so the cost is negligible, and `synchronous=FULL` commits keep their per-commit cost unchanged.
+- **Connections opened per write** (for example `decision_freeze.freeze()`): every close is a checkpoint, so every write pays one full flush, measured at about 0.4 s on this disk. That is the cost of the barrier F1 lacked; it is to be measured end to end on the real USB stack.
+- **Commits that each pay a full flush** remain the deliberate choice of `make_sqlite_durable` (the paper F&O book, OMS, protection).
 
 **Where it applies.**
 
@@ -113,6 +140,6 @@ Each guard, reverted on its own, fails a test (17 mutants).
 ## 6. Open (owner decisions and follow-ups)
 
 - **Stage 3b, "repair freeze index":** apply the planned repair after the Stage 3 backup.
-- **Power (P0, host operations).** The host drained to 0–7% three times in four days, with the runtime on USB. Keep the Mac on AC with the lid open. The battery Telegram watch exists; whether it fired on 19 Nov is not yet checked.
+- **Power and lid (P0, host operations).** Both data losses came seconds before a lid-close sleep with the runtime attached, and the host drained to 0–7% three times in four days. Keep the Mac on AC with the lid open; `caffeinate -i` does not prevent clamshell sleep. The battery Telegram watch exists; whether it fired on 19 Nov is not yet checked.
 - **Rollback-journal stores and JSONL ledgers.** Durable appends and commits need a measured `F_FULLFSYNC` policy (cost about 0.4 s per flush on this disk).
 - **Storage (owner decision).** exFAT is not journaled. An APFS-formatted runtime disk would remove the metadata-loss window.
