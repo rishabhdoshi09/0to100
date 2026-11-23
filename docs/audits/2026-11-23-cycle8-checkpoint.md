@@ -272,12 +272,36 @@ The subagent reported 8 findings and verified much more: no stranded recovery st
 | **2** A symlink to the firmlink spelling escaped `on_live_volume` | P1 | Fixed by C8.6-02 (6g): refused | — |
 | **3** Test children stripped `QT_RUNTIME_ROOT`. The checkout's pointer is production's runtime when run from production's checkout | P1 | Real | Children get a temporary root (crash, keeper and runbook tests). `/Volumes` is root-owned, so the mount point could never have been created; my runs used worktrees with no pointer file |
 | **4** A forked child's NORMAL exit closed the inherited keeper and deleted another process's WAL: 15 committed rows became 5 | P2, latent: the product never forks | **Still real** | Inherited connections are pinned (`Py_IncRef`) and never deallocated or closed in the child |
-| **5** SIGTERM killed the autonomy process (the main freeze writer) without `atexit`, leaving a durable but hot WAL that the F1 plan and byte copies must refuse | P2 | **Still real** | SIGTERM now takes the loop's existing Ctrl-C path. `KeyboardInterrupt`, then `sup.shutdown()`, then a normal exit, and the keepers checkpoint. Installed only from the main thread over the default handler |
+| **5** SIGTERM killed the autonomy process (the main freeze writer) without `atexit`, leaving a durable but hot WAL that the F1 plan and byte copies must refuse | P2 | **Still real** | **A cooperative stop** (redesigned in 6i). SIGTERM calls `sup.stop()` and wakes the loop's sleep; the loop exits between ticks, `sup.shutdown()` runs, the interpreter exits normally, and the keepers checkpoint |
 | **6** A two-hop symlink chain was stat-ed inside the mount | P2 | Fixed by the component-wise resolver | — |
 | **7** A link through an alias inside the anchor back to `/` is refused | P2 | Kept by design | A conservative refusal of a path that passes through `/Volumes` |
 | **8** Re-planning to the same `--out` erased the apply's record, so rollback was impossible | P2, pre-existing | **Real** | `plan` refuses to overwrite a manifest past `planned`, or one that records backups |
 
-Tests are in `tests/test_cycle8_part7.py`. Mutants: **5 of 5 killed.**
+Tests are in `tests/test_cycle8_part7.py`. Mutants: **5 of 5 killed** (re-run for the 6i redesign).
+
+## 6i. GPT review of the 6h fixes (`4bc96989..07ef9f07`, C8.7-01..07)
+
+The first fix for finding 5 raised `KeyboardInterrupt` from the SIGTERM handler. **GPT showed that this was the wrong tool**, and it is replaced.
+
+- **C8.7-01 (P1):** an interrupt between a job-store `UPDATE` and its commit leaves the transaction open on the connection the heartbeat shares, and the heartbeat's commit then persists a half-finished completion without its follow-ups.
+- **C8.7-02 (P1):** the acquisition ladder's deliberate `except BaseException` swallows the interrupt.
+- **The old outright kill was crash-consistent by design.** An asynchronous exception at an arbitrary point is not.
+
+**Redesign:** SIGTERM is a **cooperative stop**. The handler only calls `sup.stop()` and sets an event that the loop sleeps on.
+
+- **Idle case (usual):** the loop exits between ticks, so the stop is clean and the keepers checkpoint.
+- **Busy case:** a running job is never interrupted. It finishes, or the host's SIGKILL arrives after its 12 s grace, as before.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| **C8.7-01, C8.7-02** | P1 | No asynchronous exception any more (above). The acquisition ladder's `except BaseException` predates this cycle; it would still swallow a manual Ctrl-C (P2, open) |
+| **C8.7-03** Shutdown can exceed the 12 s grace (CA refresh thread, heartbeat join) | P2 | No regression: SIGKILL leaves the durable hot WAL, as before the keeper existed. The real-entry-point test shows the usual idle stop takes well under the grace. Open: one shutdown deadline |
+| **C8.7-04** A concurrent apply during a re-plan could be overwritten | P2 | `plan` re-reads the manifest at publication and refuses if anything wrote it. The residual window (check to rename) needs two commands on the same manifest at once |
+| **C8.7-05** The fork hook imported `ctypes` in the child | P2 | Bound at import. Without it, no keepers are made at all |
+| **C8.7-06** A rolled-back attempt could not be re-planned under the runbook's fixed names | P2 | Allowed; the backup history is carried into `earlier_backups` |
+| **C8.7-07** The SIGTERM test had a readiness race and a synthetic loop | P2 | It now drives the real `run_supervisor`: a clean exit within the grace, the WAL checkpointed, 30 rows, the scheduler lock free again |
+
+Tests are in `tests/test_cycle8_part7.py`. Mutants: **7 of 7 killed.**
 
 ## 7. Stage 2, evening (23 Nov, read-only)
 

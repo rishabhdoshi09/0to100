@@ -39,18 +39,20 @@ def _existing_owner(root) -> tuple[str, str]:
     return pid, state
 
 
-def install_sigterm_as_interrupt() -> bool:
-    """Make SIGTERM stop the autonomy process the way Ctrl-C does.
+def install_sigterm_as_stop(supervisor, wake) -> bool:
+    """Make SIGTERM a COOPERATIVE stop: ask the loop to finish, never interrupt a job.
 
-    The host supervisor stops its children with SIGTERM. Python's default action kills
-    the process outright: no ``finally``, no ``atexit``. The decision-freeze stores keep
-    one idle connection per process (product.sqlite_runtime.keep_open) whose close at
-    exit checkpoints the WAL; killed outright, the store is left with a hot (durable)
-    WAL that the F1 repair tool and byte copies must refuse (cycle-8 review, part 7).
-    Raising KeyboardInterrupt reuses the loop's existing, designed owner-interrupt path:
-    the tick loop re-raises it, ``sup.shutdown()`` releases the scheduler lock, and the
-    interpreter exits normally. Only from the main thread, and only over the default
-    handler. Returns whether it was installed.
+    The host supervisor stops its children with SIGTERM, whose default action kills the
+    process outright: no ``finally``, no ``atexit``, so the decision-freeze keepers
+    (product.sqlite_runtime.keep_open) never checkpoint and leave a durable but hot WAL that
+    the F1 repair tool and byte copies must refuse (cycle-8 review, part 7). Raising an
+    exception at an arbitrary point instead was rejected (GPT C8.7-01/02): it can split a
+    job-store write from its commit on a connection the heartbeat shares, and broad handlers
+    swallow it. This handler only calls ``supervisor.stop()`` and sets ``wake`` (the loop
+    sleeps on it), so the loop exits between ticks, ``sup.shutdown()`` runs and the
+    interpreter exits normally. A job already running finishes, or the host's SIGKILL
+    arrives after its grace period, exactly as before. Only from the main thread, never
+    over an existing handler. Returns whether it was installed.
     """
     import signal
     import threading
@@ -60,10 +62,11 @@ def install_sigterm_as_interrupt() -> bool:
     if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
         return False
 
-    def _interrupt(_signum, _frame):
-        raise KeyboardInterrupt("SIGTERM")
+    def _stop(_signum, _frame):
+        supervisor.stop()
+        wake.set()
 
-    signal.signal(signal.SIGTERM, _interrupt)
+    signal.signal(signal.SIGTERM, _stop)
     return True
 
 
@@ -146,9 +149,9 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     and the dedicated React terminal are optional observers; neither owns the scheduler.
     """
     import os
+    import threading
     import traceback
 
-    install_sigterm_as_interrupt()
     install_runtime_handlers()
 
     from research.autonomy.supervisor import Supervisor
@@ -161,6 +164,8 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
         print(f"autonomy: failed to initialise: {type(exc).__name__}: {exc}", flush=True)
         traceback.print_exc()
         return 2
+    wake = threading.Event()
+    install_sigterm_as_stop(sup, wake)              # before start(): a stop then still ends cleanly
 
     if not sup.start():
         pid, state = _existing_owner(resolved_root)
@@ -194,6 +199,7 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
             sup,
             interval_s=interval_s,
             max_iterations=max_iterations,
+            sleep_fn=wake.wait,                     # a SIGTERM wakes the sleep at once
         )
     except KeyboardInterrupt:
         print("\nautonomy: stopping on owner interrupt…", flush=True)

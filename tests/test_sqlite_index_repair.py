@@ -600,6 +600,7 @@ def test_the_runbook_f1_commands_run_as_written(tmp_path):
     # the production runtime when run from the production checkout (cycle-8 review, part 7)
     env = {**os.environ, "M": str(M), "R": str(logs), "PATH": f"{stubs}:{os.environ['PATH']}",
            "QT_RUNTIME_ROOT": str(tmp_path / "child-runtime")}
+    (tmp_path / "child-runtime").mkdir()
     text = _runbook_text()
     stage3b = text.split("## 3b. Repair", 1)[1].split("\n## 4.", 1)[0]
     blocks = {

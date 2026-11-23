@@ -21,6 +21,14 @@ _KEEPERS_LOCK = threading.Lock()
 _ATEXIT = {"registered_pid": None}
 _INHERITED: list[sqlite3.Connection] = []
 
+try:                                            # bound at import: the fork hook imports nothing
+    import ctypes as _ctypes
+
+    _PIN = _ctypes.pythonapi.Py_IncRef
+    _PY_OBJECT = _ctypes.py_object
+except (ImportError, AttributeError):           # no way to pin in a forked child: no keepers at all
+    _PIN = _PY_OBJECT = None
+
 
 def _forget_inherited_keepers() -> None:
     """In a forked child: a fresh lock (the parent's may have been held at fork) and an empty
@@ -29,15 +37,13 @@ def _forget_inherited_keepers() -> None:
     Python workers (macOS multiprocessing spawns; subprocesses exec); this makes it safe if
     something ever does."""
     global _KEEPERS_LOCK
-    import ctypes
-
     _KEEPERS_LOCK = threading.Lock()
     for con in _KEEPERS.values():
         # An extra reference the child never releases: the connection is never deallocated,
         # so it is never closed, not even when the child's interpreter shuts down. Closing it
         # here would let SQLite checkpoint from the parent's stale view and delete a WAL that
         # holds other processes' commits (cycle-8 review, part 7: 15 committed rows became 5).
-        ctypes.pythonapi.Py_IncRef(ctypes.py_object(con))
+        _PIN(_PY_OBJECT(con))
         _INHERITED.append(con)
     _KEEPERS.clear()
     _ATEXIT["registered_pid"] = None
@@ -65,6 +71,8 @@ def keep_open(path: str | Path) -> None:
     pid: a forked child never touches its parent's keeper. Best effort: a store
     that cannot be kept open keeps working exactly as before.
     """
+    if _PIN is None:
+        return                                  # a child could not pin an inherited keeper (GPT C8.7-05)
     target = str(Path(path).resolve())
     key = (os.getpid(), target)
     evicted: list[sqlite3.Connection] = []

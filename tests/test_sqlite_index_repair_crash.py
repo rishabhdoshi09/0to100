@@ -97,6 +97,7 @@ print("COMPLETED")
 
 def _crash(op: str, point: str, manifest: Path) -> subprocess.CompletedProcess:
     # its OWN runtime root, never the checkout's pointer (the production runtime in production's checkout)
+    (manifest.parent / "child-runtime").mkdir(exist_ok=True)
     env = {**os.environ, "QT_RUNTIME_ROOT": str(manifest.parent / "child-runtime")}
     return subprocess.run([sys.executable, "-c", _RUNNER, str(REPO), point, op, str(manifest)],
                           capture_output=True, text=True, env=env, timeout=120)

@@ -517,7 +517,7 @@ def _check_staging(entry: Path, staging: Path) -> None:
         raise SystemExit(f"refusing: staging must not be in the database's directory ({entry.parent})")
 
 
-def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
+def _check_outputs(entry: Path, staging: Path, out: Path) -> dict[str, Any] | None:
     """Outputs live on a disk the operator owns, never in the database's directory.
 
     Compared by FILESYSTEM IDENTITY up the resolved path, so a symlinked staging
@@ -537,18 +537,45 @@ def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
         chain = _existing_chain(Path(p) if what == "staging" else Path(p).parent)
         if any(_identity(c) == target_dir for c in chain):
             raise SystemExit(f"refusing: {what} must not be in the database's directory ({entry.parent})")
-    if out.exists():
-        try:
-            prior = json.loads(out.read_text())
-        except Exception:
-            prior = None
-        if not (isinstance(prior, dict) and prior.get("tool") == TOOL):
-            raise SystemExit(f"refusing: {out} exists and is not a {TOOL} manifest")
-        recorded = [k for k in ("backup", "backup_pending", "earlier_backups") if prior.get(k)]
-        if prior.get("state") not in ("planned", "nothing_to_repair") or recorded:
-            # it is what rollback needs: its state and its backup record (cycle-8 review, part 7)
-            raise SystemExit(f"refusing: {out} is the record of an apply (state {prior.get('state')!r}, "
-                             f"{', '.join(recorded) or 'no backup yet'}); rollback needs it: plan to a new --out")
+    prior = _prior_manifest(out)
+    if prior is not None:
+        state = prior.get("state")
+        in_flight = [k for k in ("backup", "backup_pending") if prior.get(k)]
+        # Replaceable: an untouched plan, or a ROLLED-BACK attempt (its backup history is carried
+        # into the new plan). Anything else is what rollback needs (cycle-8 review, parts 7-8).
+        if not (state == "rolled_back" or (state in ("planned", "nothing_to_repair") and not in_flight)):
+            raise SystemExit(f"refusing: {out} is the record of an apply (state {state!r}, "
+                             f"{', '.join(in_flight) or 'no backup yet'}); rollback needs it: plan to a new --out")
+    return prior
+
+
+def _prior_manifest(out: Path) -> dict[str, Any] | None:
+    """The manifest already at ``out`` (None when there is none); anything else there is refused."""
+    if not out.exists():
+        return None
+    try:
+        prior = json.loads(out.read_text())
+    except (OSError, ValueError):
+        prior = None
+    if not (isinstance(prior, dict) and prior.get("tool") == TOOL):
+        raise SystemExit(f"refusing: {out} exists and is not a {TOOL} manifest")
+    return prior
+
+
+def _publish_plan(out: Path, m: dict[str, Any], prior: dict[str, Any] | None) -> None:
+    """Write the plan only if nothing wrote ``out`` while it was made: an apply that published
+    its record in the meantime must never be overwritten (GPT C8.7-04). The remaining window,
+    this check to the rename, needs two commands on the same manifest at once."""
+    if _prior_manifest(out) != prior:
+        raise SystemExit(f"refusing: {out} changed while the plan was made (another command wrote it); "
+                         "inspect it, then plan to a new --out")
+    if prior is not None:
+        history = set(prior.get("earlier_backups") or [])
+        history.update(n for n in (prior.get("backup"), prior.get("backup_pending")) if n)
+        if history:
+            m["earlier_backups"] = sorted(history)            # an earlier attempt's backups stay recorded
+            m["replanned_over"] = {"state": prior.get("state"), "plan_id": prior.get("plan_id")}
+    _write_manifest(out, m)
 
 
 def _manifest_path(path: str | Path) -> Path:
@@ -660,7 +687,7 @@ def check(target: str | Path, staging: str | Path) -> dict[str, Any]:
 def plan(target: str | Path, staging: str | Path, out: str | Path, *, expect_stale: int | None = None) -> dict[str, Any]:
     entry = _check_target(Path(target))
     staging, out = Path(staging), Path(out)
-    _check_outputs(entry, staging, out)
+    prior = _check_outputs(entry, staging, out)
     out = _manifest_path(out)
     _check_manifest_place(out, entry)
     staging = staging.resolve()
@@ -684,7 +711,7 @@ def plan(target: str | Path, staging: str | Path, out: str | Path, *, expect_sta
     if _consistent(before):
         m.update({"state": "nothing_to_repair", "ready": False, "nothing_to_repair": True,
                   "gates": {"damage_found": False}})
-        _write_manifest(out, m)
+        _publish_plan(out, m, prior)
         return m
 
     shutil.copy2(original, repaired)
@@ -724,7 +751,7 @@ def plan(target: str | Path, staging: str | Path, out: str | Path, *, expect_sta
         "gates": gates, "ready": all(gates.values()),
         "state": "planned",
     })
-    _write_manifest(out, m)
+    _publish_plan(out, m, prior)
     return m
 
 
