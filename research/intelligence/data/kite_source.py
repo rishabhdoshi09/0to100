@@ -350,6 +350,10 @@ class KiteDataSource:
                 continue
             hist = self._load_history(cid)
             for d, (o, h, l, c, v) in hist.items():
+                # A previous refresh may have cached bars beyond this run's
+                # completed-session cutoff, particularly during historical replay.
+                if d > want_to:
+                    continue
                 if is_bench:
                     index_rows.append(("NIFTY", d, o, h, l, c))
                 else:
@@ -410,16 +414,24 @@ class KiteDataSource:
         # activate ONLY when forward-eligible: verified + fresh + benchmark + CA coverage etc.
         from research.intelligence import data_state as DS
         health = dict(self.store.open_snapshot(sid).health()) if ok else {}
-        health["freshness_days"] = 0.0 if CAL.snapshot_freshness(want_to, now=now)["fresh"] else 999.0
+        latest_equity = rep.date_range[1]
+        latest_benchmark = max((row[1] for row in index_rows), default="")
+        current_bars = latest_equity == want_to and latest_benchmark == want_to
+        health["freshness_days"] = 0.0 if current_bars else 999.0
         tier, tier_reasons = DS.classify_tier(health)
         rep.tier = tier
-        if ok and DS.forward_eligible(tier):
+        if ok and current_bars and DS.forward_eligible(tier):
             self.store.activate_snapshot(sid, actor="system", reason="kite daily refresh")
             rep.activated = True
         else:
             rep.status = "COMMITTED_NOT_ACTIVATED"
-            rep.reason = (f"verify failed: {fails}" if not ok
-                          else f"not forward-eligible ({tier}): {tier_reasons}")
+            if not ok:
+                rep.reason = f"verify failed: {fails}"
+            elif not current_bars:
+                rep.reason = (f"stale or missing completed-session bars: required {want_to}, "
+                              f"equity {latest_equity}, benchmark {latest_benchmark or 'missing'}")
+            else:
+                rep.reason = f"not forward-eligible ({tier}): {tier_reasons}"
             # previous active snapshot is preserved (we never deactivated it)
             rep.incidents.append({"severity": "WARNING", "code": "REFRESH_NOT_ACTIVATED",
                                   "prev_active": prev_active, "tier": tier})
