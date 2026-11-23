@@ -109,3 +109,77 @@ def test_counterfactual_concurrent_retries_return_the_same_projection(tmp_path, 
         assert first.result(timeout=10) == second.result(timeout=10)
 
     assert [json.loads(line) for line in ledger.read_bytes().splitlines()] == [first.result()]
+
+
+@pytest.mark.parametrize("limit", [0, 15, None], ids=["before-bytes", "partial", "all-bytes"])
+def test_counterfactual_freeze_recovers_an_interrupted_append(tmp_path, monkeypatch, limit):
+    import os
+    import subprocess
+    import sys
+
+    ledger = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(ledger))
+    first = _freeze_rejection(ledger)
+    prefix = ledger.read_bytes()
+    script = r"""
+import os
+import sys
+from pathlib import Path
+from tests import network_policy
+from tests.test_decision_freeze_integrity import _freeze_rejection
+
+network_policy.install()
+ledger = Path(os.environ["QT_COUNTERFACTUALS"])
+original = Path.open
+
+class Interrupted:
+    def __init__(self, mode):
+        self.handle = original(ledger, mode)
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        self.handle.close()
+    def write(self, data):
+        limit = None if sys.argv[1] == "None" else int(sys.argv[1])
+        self.handle.write(data[:limit])
+        self.handle.flush()
+        os.fsync(self.handle.fileno())
+        os._exit(77)
+
+def intercept(path, mode="r", *args, **kwargs):
+    if path == ledger and mode in {"a", "ab"}:
+        return Interrupted(mode)
+    return original(path, mode, *args, **kwargs)
+
+Path.open = intercept
+_freeze_rejection(ledger, "rejected-2")
+"""
+    child = subprocess.run([sys.executable, "-c", script, str(limit)], env=os.environ.copy(),
+                           capture_output=True, text=True, timeout=45)
+    assert child.returncode == 77, child.stderr
+    assert ledger.read_bytes().startswith(prefix)
+    if limit is not None:
+        assert len(ledger.read_bytes()) == len(prefix) + limit
+    second = _freeze_rejection(ledger, "rejected-2")
+    assert _freeze_rejection(ledger, "rejected-2") == second
+    assert [json.loads(line) for line in ledger.read_bytes().splitlines()] == [first, second]
+
+
+def test_counterfactual_append_recovery_refuses_a_changed_ledger(tmp_path, monkeypatch):
+    ledger = tmp_path / "counterfactuals.jsonl"
+    _freeze_rejection(ledger)
+
+    def interrupt(*args):
+        raise OSError("interrupted before append")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(CF, "_finish_append", interrupt)
+        with pytest.raises(OSError, match="interrupted before append"):
+            _freeze_rejection(ledger, "rejected-2")
+
+    changed = ledger.read_bytes().replace(b'"TCS"', b'"HAL"')
+    ledger.write_bytes(changed)
+    with pytest.raises(ValueError, match="differs from append intent"):
+        _freeze_rejection(ledger, "rejected-2")
+    assert ledger.read_bytes() == changed
+    assert CF._append_intent_path(ledger).exists()
