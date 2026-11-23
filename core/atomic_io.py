@@ -153,12 +153,16 @@ def make_sqlite_checkpoint_safe(connection: Any) -> None:
     others. On 19 Nov 2026 that left a decision-freeze ledger with index pages
     from one transaction and table pages from an older one.
 
-    ``checkpoint_fullfsync`` makes the checkpoint syncs ``F_FULLFSYNC``. It costs
-    nothing per commit at any ``synchronous`` level. With ``synchronous`` at
-    NORMAL or below, commits never sync, so ``fullfsync`` is also set: it only
-    affects the rare WAL-header sync. With FULL it would add a full flush to
-    every commit, which is :func:`make_sqlite_durable`'s deliberate choice.
-    Call it after the store's ``journal_mode`` and ``synchronous`` pragmas.
+    ``checkpoint_fullfsync`` makes the checkpoint syncs ``F_FULLFSYNC``: one full
+    flush per checkpoint, at any ``synchronous`` level. A persistent connection
+    checkpoints rarely (every ~1000 WAL pages), so its cost is negligible. A store
+    that opens a connection per write checkpoints on every close (the last
+    connection to a WAL database checkpoints it and deletes the WAL), so each write
+    pays one flush: that is exactly the step F1's writer lacked a barrier for.
+    With ``synchronous`` at NORMAL or below, commits never sync, so ``fullfsync``
+    is also set: it only adds the WAL-header sync. With FULL it would add a full
+    flush to every commit, which is :func:`make_sqlite_durable`'s deliberate
+    choice. Call it after the store's ``journal_mode`` and ``synchronous`` pragmas.
     """
     if sys.platform != "darwin":
         return

@@ -319,6 +319,9 @@ def _checkpoint_sqlite_sources(repo_root: Path) -> list[str]:
         try:
             conn = sqlite3.connect(f"file:{path}?mode=rw", timeout=1.0, uri=True)
             try:
+                from core.atomic_io import make_sqlite_checkpoint_safe
+
+                make_sqlite_checkpoint_safe(conn)      # the checkpoint is a real barrier (finding F1)
                 result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 if result and int(result[0] or 0) != 0:
                     raise HostInstallError(

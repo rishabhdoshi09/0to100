@@ -40,7 +40,9 @@ def connect(path: str | Path, *, timeout: float = 30.0, wal: bool = True) -> sql
         con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA foreign_keys=ON")
-    if wal:
+    # The journal mode lives in the FILE: a wal=False connection to a store that is
+    # already WAL still checkpoints it, so the barrier follows the file (GPT F1-08).
+    if wal or str(con.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal":
         from core.atomic_io import make_sqlite_checkpoint_safe
 
         make_sqlite_checkpoint_safe(con)        # real checkpoint barriers on macOS (finding F1)

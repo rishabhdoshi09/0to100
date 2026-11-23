@@ -78,8 +78,8 @@ def test_the_busiest_store_keeps_its_commit_cost(tmp_path, darwin):
     assert _flags(store._db) == (1, 0, 2)
 
 
-_WAL = re.compile(r"""\.execute\(\s*["']PRAGMA journal_mode\s*=\s*WAL["']""")
-_BARRIER = ("make_sqlite_checkpoint_safe(", "make_sqlite_durable(")
+_WAL = re.compile(r"""journal_mode\s*=\s*wal|wal_checkpoint""", re.I)
+_BARRIER = ("make_sqlite_checkpoint_safe(", "make_sqlite_durable(", "checkpoint_fullfsync=ON")
 # Development tooling, installed and run outside the desk (see docs/runbooks).
 _EXEMPT = {"scripts/quantterm_relay.py"}
 
@@ -92,6 +92,40 @@ def test_every_wal_store_in_the_repo_opts_into_the_barrier():
             continue
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         for i, line in enumerate(lines):
-            if _WAL.search(line) and not any(b in "\n".join(lines[i:i + 8]) for b in _BARRIER):
+            # a WAL pragma needs a barrier just after it; a checkpoint needs one just before it
+            window = "\n".join(lines[max(0, i - 14):i + 14])
+            if _WAL.search(line) and not line.lstrip().startswith("#") and not any(b in window for b in _BARRIER):
                 missing.append(f"{rel}:{i + 1}")
     assert not missing, f"WAL stores without a checkpoint barrier (finding F1): {missing}"
+
+
+
+def test_a_wal_false_connection_to_a_wal_store_still_gets_the_barrier(tmp_path, darwin):
+    from product.sqlite_runtime import connect
+
+    seed = connect(tmp_path / "store.db")            # creates it in WAL mode
+    seed.close()
+    con = connect(tmp_path / "store.db", wal=False)  # the file is still WAL
+    assert _flags(con)[:2] == (1, 1)
+    con.close()
+
+
+def test_the_migration_checkpoint_uses_the_barrier(tmp_path, monkeypatch, darwin):
+    """GPT F1-08: host_install checkpoints existing WAL stores during migration."""
+    from product import host_install
+    from tests.sqlite_damage import healthy_freeze_db
+
+    db = healthy_freeze_db(tmp_path / "existing.db")
+    monkeypatch.setattr(host_install, "_sqlite_source_paths", lambda _: [db])
+    real_connect = sqlite3.connect
+    statements = []
+
+    def traced(*a, **k):
+        con = real_connect(*a, **k)
+        con.set_trace_callback(lambda sql: statements.append(sql.lower()))
+        return con
+
+    monkeypatch.setattr(host_install.sqlite3, "connect", traced)
+    host_install._checkpoint_sqlite_sources(tmp_path)
+    at = next(i for i, s in enumerate(statements) if "wal_checkpoint" in s)
+    assert any("checkpoint_fullfsync=on" in s for s in statements[:at])
