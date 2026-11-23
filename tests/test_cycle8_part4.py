@@ -44,7 +44,7 @@ _OPENED: dict = {"armed": None, "on": False, "events": []}
 
 def _audit(event, args):
     if _OPENED["armed"] and event == "sqlite3.connect" and str(args[0]) == _OPENED["armed"]:
-        _OPENED["on"] = True
+        _OPENED.update(on=True, armed=None)     # consumed once: a SECOND connect is recorded (C8.6-09)
         return
     if _OPENED["on"] and event in ("open", "sqlite3.connect"):
         _OPENED["events"].append((event, args))

@@ -56,10 +56,17 @@ def _connect(path: str | Path | None = None) -> sqlite3.Connection:
         )
         """
     )
-    # One connection per freeze, ~3,000 a day: keep the store open for the process so each
-    # close is not the last one and does not pay a barriered checkpoint (cycle-8 benchmark).
+    # A freeze is the audit boundary, and callers reference its id elsewhere at once (the
+    # counterfactual JSONL line): it must be DURABLE when freeze() returns. synchronous=FULL
+    # with F_FULLFSYNC makes each commit one full flush of the WAL (GPT C8.6-01). One idle
+    # keeper per process means a close is not the last one, so it does not also pay a
+    # barriered checkpoint. Measured on the USB stack (24 Nov): p50 85 ms, p99 760 ms per
+    # freeze, against p50 280 ms, p99 964 ms and a 110 s stall without the keeper.
+    from core.atomic_io import make_sqlite_durable
     from product.sqlite_runtime import keep_open
 
+    con.execute("PRAGMA synchronous=FULL")
+    make_sqlite_durable(con)
     keep_open(freeze_path(path))
     return con
 

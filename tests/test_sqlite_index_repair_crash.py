@@ -173,21 +173,27 @@ def test_a_hard_crash_during_rollback_leaves_repaired_or_original_and_recovers(t
 
 
 def test_a_header_mismatch_then_a_crash_after_commit_still_recovers(tmp_path, planned):
-    """GPT C8-05: the trial is proven (and that recorded durably) before COMMIT, so after a
-    crash past COMMIT both commands tell a proven repair whose header differs from an
-    unknown change: apply reaches applied_unverified, rollback restores."""
+    """GPT C8-05, refined by C8.6-03: the trial is proven (and recorded durably) before
+    COMMIT, so after a crash past COMMIT apply reaches a definite verdict on the repaired
+    content (applied_unverified, never stranded). A header first seen after the restart
+    could be a later write, so it never authorizes an automatic rollback: rollback refuses
+    and the repaired database stands."""
     db, manifest, m = planned
     m["expected_content"]["header"]["44-91"] = "00" * 48          # the committed header will differ
     manifest.write_text(json.dumps(m))
     r = _crash("apply", "after_commit", manifest)
     assert r.returncode == 137, r.stderr[-400:]
-    assert json.loads(manifest.read_text())["verified_before_commit"] is True
-    with pytest.raises(SystemExit, match="applied_unverified"):
+    crashed = json.loads(manifest.read_text())
+    assert crashed["verified_before_commit"] is True and crashed["verified_attempt"] == crashed["attempt_id"]
+    with pytest.raises(SystemExit, match="first seen after a restart"):
         sir.apply(manifest, "recover", target_is_copy=True)
-    assert json.loads(manifest.read_text())["state"] == "applied_unverified"
-    done = sir.rollback(manifest, target_is_copy=True)
-    assert done["state"] == "rolled_back" and done["rollback_ok"]
-    assert sir._same_content(_content_as_sqlite_recovers_it(db, tmp_path), m["original_content"])
+    after = json.loads(manifest.read_text())
+    assert after["state"] == "applied_unverified" and after["header_first_seen_on_restart"] is True
+    assert "applied_header" not in after
+    with pytest.raises(SystemExit, match="writes were made after the repair"):
+        sir.rollback(manifest, target_is_copy=True)
+    state = _content_as_sqlite_recovers_it(db, tmp_path)
+    assert sir._same_content(state, m["expected_content"], ignore_header=True) and state["integrity"] == ["ok"]
 
 
 def test_the_lock_dies_with_the_process(tmp_path, planned):

@@ -127,19 +127,23 @@ def atomic_write_with(
 def make_sqlite_durable(connection: Any) -> None:
     """Ask SQLite for real stable-storage syncs on macOS (``F_FULLFSYNC``).
 
-    For stores whose loss costs money or truth and that commit rarely (paper
-    F&O book, OMS orders, protection plans). Busy stores (job ledgers, caches)
-    must not use it: with ``synchronous=FULL`` (SQLite's default) each commit
-    then waits ~0.4 s on the owner's USB disk. Every WAL store needs at least
+    For stores whose loss costs money or truth (paper F&O book, OMS orders,
+    protection plans, decision freezes). With ``synchronous=FULL`` each commit
+    then waits for one full flush: measured on the owner's USB stack (24 Nov),
+    p50 58-85 ms, p99 ~0.6-0.8 s. A store that also closes its last connection
+    per write pays a barriered checkpoint on top (p50 280 ms): keep it open
+    (``product.sqlite_runtime.keep_open``). Every WAL store needs at least
     :func:`make_sqlite_checkpoint_safe`.
     """
     if sys.platform != "darwin":
         return
+    import sqlite3
+
     try:
         connection.execute("PRAGMA fullfsync=ON")
         connection.execute("PRAGMA checkpoint_fullfsync=ON")
-    except Exception:
-        pass
+    except sqlite3.Error as exc:      # e.g. a closed connection: reported, the store still works
+        print(f"[atomic_io] durable syncs not set: {exc}", file=sys.stderr, flush=True)
 
 
 def make_sqlite_checkpoint_safe(connection: Any) -> None:

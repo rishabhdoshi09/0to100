@@ -384,15 +384,23 @@ def _held_open(path: Path) -> list[str]:
 
 
 def _full_fsync(fd: int) -> None:
-    """fsync that reaches the medium on macOS (F_FULLFSYNC), else a plain fsync."""
-    try:
-        import fcntl
+    """fsync that reaches the medium on macOS (F_FULLFSYNC), else a plain fsync.
 
-        if hasattr(fcntl, "F_FULLFSYNC"):
+    Falls back to fsync ONLY where F_FULLFSYNC is unsupported (EINVAL, ENOTSUP,
+    ENOTTY); a real error, EIO above all, is raised and never downgraded to a
+    weaker sync that would let the caller believe the data is durable (GPT C8.6-06).
+    """
+    import errno
+    import fcntl
+
+    if hasattr(fcntl, "F_FULLFSYNC"):
+        try:
             fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
             return
-    except OSError:
-        pass
+        except OSError as exc:
+            if exc.errno not in (errno.EINVAL, errno.ENOTSUP, errno.ENOTTY,
+                                 getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)):
+                raise
     os.fsync(fd)
 
 

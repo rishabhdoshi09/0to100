@@ -92,7 +92,8 @@ from product.bhav_store_rebuild import (
 )
 
 TOOL = "sqlite_index_repair"
-VERSION = 2
+VERSION = 3      # v3 (cycle 8, part 6): attempt-bound trial proofs, applied_header, no backup reuse;
+                 # a v2 manifest carries other recovery semantics and is refused: re-plan
 INDEX_DAMAGE = (
     re.compile(r"^wrong # of entries in index \S+$"),
     re.compile(r"^row \d+ missing from index \S+$"),
@@ -113,6 +114,10 @@ _CHUNK = 1 << 20
 PRESERVED = ("tables", "schema_sha256", "settings", "foreign_key_sha256")
 _UNVERIFIED = ("the content was proven before COMMIT, but the committed file's header differs from the plan's "
                "(state applied_unverified): inspect with check; rollback accepts this state")
+_UNVERIFIED_RESTART = ("the repaired content was proven before COMMIT, but the header differs from the plan's and was "
+                       "first seen after a restart, so it may be a later write (state applied_unverified): the "
+                       "database is repaired; an automatic rollback will refuse it; restore the stage-3 SSD copy by "
+                       "hand only after inspecting with check")
 
 
 # ── identity, copies, sidecars ───────────────────────────────────────────────
@@ -732,7 +737,8 @@ REQUIRED_GATES = ("damage_found", "index_damage_only", "supported_schema", "repa
 def _load(manifest_path: Path) -> dict[str, Any]:
     m = json.loads(Path(manifest_path).read_text())
     if m.get("tool") != TOOL or m.get("version") != VERSION:
-        raise SystemExit(f"refusing: not a {TOOL} v{VERSION} manifest")
+        raise SystemExit(f"refusing: not a {TOOL} v{VERSION} manifest (an older version's manifest carries other "
+                         "recovery rules: re-plan with this version)")
     return m
 
 
@@ -919,13 +925,14 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
         if (m.get("state") == "applying" and m.get("attempt_id")
                 and m.get("verified_attempt") == m.get("attempt_id")
                 and _same_content(content, m["expected_content"], ignore_header=True)):
-            # THIS attempt's trial was proven before COMMIT, the final record was cut off, and only
-            # the header differs from the plan's: the verdict an uninterrupted run reaches, with the
-            # observed header recorded for rollback (GPT C8-05; bound to the attempt: C8.5-05)
-            m.update({"state": "applied_unverified", "applied_ok": False, "applied_header": content["header"],
+            # THIS attempt's trial was proven before COMMIT and the final record was cut off; only
+            # the header differs from the plan's. The repaired content stands (applied_unverified),
+            # but a header FIRST SEEN after a restart could be a later write, so it is not recorded
+            # as one rollback may accept: an automatic rollback refuses (GPT C8-05, C8.5-05, C8.6-03)
+            m.update({"state": "applied_unverified", "applied_ok": False, "header_first_seen_on_restart": True,
                       "applied_at": m.get("applied_at") or _now()})
             _write_manifest(manifest_path, m)
-            raise SystemExit(_UNVERIFIED)
+            raise SystemExit(_UNVERIFIED_RESTART)
         if not _same_content(content, m["original_content"]):
             raise SystemExit("refusing: the target is neither the planned original nor the repaired database "
                              "(it changed since the plan; re-plan)")

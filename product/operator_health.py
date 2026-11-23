@@ -17,7 +17,7 @@ broker/provider cannot hang ``/api/dashboard``.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 import sqlite3
 from typing import Any, Iterable
 
@@ -123,6 +123,25 @@ def _cached_auth_job() -> dict[str, Any]:
         return {}
 
 
+def _auth_evidence_is_current(job: dict[str, Any], now: datetime | None = None) -> bool:
+    """A Zerodha access token lives until 06:00 IST the next morning, so a passed auth check
+    proves nothing after the next 06:00 IST rollover. The lane used to show READY from any
+    passed check, however old (cycle 8: "SESSION_VALID" from a 09:30 check all evening, and
+    after the next morning's rollover too); invariant 2, stale must look stale. Fails closed
+    on a missing or unreadable time."""
+    from core import market_clock
+
+    try:
+        finished = float(job.get("finished_at"))
+    except (TypeError, ValueError):
+        return False
+    current = now or market_clock.now_ist()
+    rollover = current.replace(hour=6, minute=0, second=0, microsecond=0)
+    if current < rollover:
+        rollover -= timedelta(days=1)
+    return finished >= rollover.timestamp()
+
+
 def _broker_lane() -> dict[str, Any]:
     """Project broker readiness from persisted auth evidence, never a request-time probe."""
     job = _cached_auth_job()
@@ -137,9 +156,11 @@ def _broker_lane() -> dict[str, Any]:
     except Exception:
         snapshot = ""
 
-    auth_ready = status == "SUCCEEDED" and (
+    passed = status == "SUCCEEDED" and (
         "AUTH_READY" in result or "SESSION_VALID" in result or result == "READY"
     )
+    stale_auth = passed and not _auth_evidence_is_current(job)
+    auth_ready = passed and not stale_auth
     token_problem = (
         "TOKEN" in error_code
         or "SESSION_EXPIRED" in error_code
@@ -152,7 +173,12 @@ def _broker_lane() -> dict[str, Any]:
         for marker in ("TIMEOUT", "CONNECTION", "NETWORK", "PROVIDER_UNAVAILABLE")
     )
 
-    if auth_ready and snapshot:
+    if stale_auth:
+        state = "CHECKING"
+        detail = ("The last Zerodha auth check passed before the most recent 06:00 IST token rollover; "
+                  "waiting for today's check (the daily login may be required).")
+        auth_status = "STALE"
+    elif auth_ready and snapshot:
         state = "READY"
         detail = "Latest scheduled Zerodha auth check passed and an active broker snapshot is available."
         auth_status = "SESSION_VALID"
@@ -190,7 +216,7 @@ def _broker_lane() -> dict[str, Any]:
         "auth_ready": bool(auth_ready),
         "login_required": state == "LOGIN_REQUIRED",
         "auth_status": auth_status,
-        "reason_code": error_code or ("AUTH_READY" if auth_ready else auth_status),
+        "reason_code": error_code or ("AUTH_READY" if auth_ready else "AUTH_STALE" if stale_auth else auth_status),
         "detail": detail,
         "snapshot_id": snapshot,
         "source": "persisted_auth_health",

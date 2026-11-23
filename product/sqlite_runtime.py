@@ -19,6 +19,24 @@ MAX_KEEPERS = 8
 _KEEPERS: "OrderedDict[tuple[int, str], sqlite3.Connection]" = OrderedDict()
 _KEEPERS_LOCK = threading.Lock()
 _ATEXIT = {"registered_pid": None}
+_INHERITED: list[sqlite3.Connection] = []
+
+
+def _forget_inherited_keepers() -> None:
+    """In a forked child: a fresh lock (the parent's may have been held at fork) and an empty
+    registry. The parent's connections are parked, never used, evicted or closed here:
+    SQLite forbids using a connection across fork (GPT C8.6-05). QuantTerm does not fork
+    Python workers (macOS multiprocessing spawns; subprocesses exec); this makes it safe if
+    something ever does."""
+    global _KEEPERS_LOCK
+    _KEEPERS_LOCK = threading.Lock()
+    _INHERITED.extend(_KEEPERS.values())
+    _KEEPERS.clear()
+    _ATEXIT["registered_pid"] = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_inherited_keepers)
 
 
 def keep_open(path: str | Path) -> None:

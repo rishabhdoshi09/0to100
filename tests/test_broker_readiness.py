@@ -1,6 +1,10 @@
 """Zerodha is an execution/live-data lane, not a global QuantTerm health switch."""
 from __future__ import annotations
 
+import time
+
+import pytest
+
 from product import operator_health
 from product import readiness
 from datetime import datetime, timezone
@@ -92,7 +96,7 @@ def test_operator_broker_lane_uses_persisted_auth_job_not_live_probe(monkeypatch
             "result_summary": "AUTH_READY",
             "error_code": "",
             "error_message": "",
-            "finished_at": 1_777_777_777.0,
+            "finished_at": time.time(),          # today's check: the token rolls over at 06:00 IST
         },
     )
     monkeypatch.setattr(readiness, "kite_snapshot_id", lambda: "snap-123")
@@ -305,3 +309,43 @@ def test_paper_entry_still_blocks_when_official_market_data_is_not_ready(monkeyp
     )
     matrix = readiness.inspect_readiness()
     assert readiness.missing_for("PAPER_ENTRY", matrix) == [readiness.OFFICIAL_MARKET_DATA_READY]
+
+
+# ── cycle 8: a passed auth check is only as good as the token it proved (06:00 IST rollover) ──
+
+def _ist(day, hh, mm=0):
+    from datetime import datetime
+    from core.market_clock import IST
+    return datetime(2026, 11, day, hh, mm, tzinfo=IST)
+
+
+@pytest.mark.parametrize("checked, now, ready", [
+    (_ist(23, 9, 30), _ist(23, 14, 44), True),     # the same session
+    (_ist(22, 9, 30), _ist(23, 5, 0), True),       # yesterday's token lives until 06:00
+    (_ist(22, 9, 30), _ist(23, 7, 0), False),      # ... and not after it
+    (_ist(23, 5, 59), _ist(23, 6, 1), False),      # a check just before the rollover
+])
+def test_a_passed_auth_check_expires_at_the_06_00_ist_rollover(monkeypatch, checked, now, ready):
+    from core import market_clock
+
+    monkeypatch.setattr(operator_health, "_cached_auth_job", lambda: {
+        "job_id": "auth-3", "job_type": "auth_health", "status": "SUCCEEDED", "result_summary": "AUTH_READY",
+        "error_code": "", "error_message": "", "finished_at": checked.timestamp()})
+    monkeypatch.setattr(readiness, "kite_snapshot_id", lambda: "snap-123")
+    monkeypatch.setattr(market_clock, "now_ist", lambda: now)
+    state = operator_health._broker_lane()
+    assert state["live_data_ready"] is ready and state["execution_ready"] is ready
+    if ready:
+        assert state["state"] == "READY" and state["auth_status"] == "SESSION_VALID"
+    else:
+        assert state["state"] == "CHECKING" and state["auth_status"] == "STALE"
+        assert state["reason_code"] == "AUTH_STALE" and "06:00 IST" in state["detail"]
+
+
+@pytest.mark.parametrize("finished", [None, "", "not-a-time"])
+def test_a_passed_auth_check_without_a_readable_time_is_never_ready(monkeypatch, finished):
+    monkeypatch.setattr(operator_health, "_cached_auth_job", lambda: {
+        "job_id": "auth-4", "job_type": "auth_health", "status": "SUCCEEDED", "result_summary": "AUTH_READY",
+        "error_code": "", "error_message": "", "finished_at": finished})
+    monkeypatch.setattr(readiness, "kite_snapshot_id", lambda: "snap-123")
+    assert operator_health._broker_lane()["live_data_ready"] is False

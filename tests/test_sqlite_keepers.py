@@ -60,10 +60,11 @@ def test_a_forked_child_never_touches_its_parents_keeper(tmp_path):
     db = tmp_path / "decision_freeze.db"
     _freeze(db, 0)
     pid = os.fork()
-    if pid == 0:                                                 # the child: it must not close the parent's
+    if pid == 0:            # the child: the parent's keeper is parked, never used or closed (C8.6-05)
         try:
             sqlite_runtime.close_keepers()
-            os._exit(0 if len(sqlite_runtime._KEEPERS) == 1 else 3)
+            ok = len(sqlite_runtime._KEEPERS) == 0 and len(sqlite_runtime._INHERITED) == 1
+            os._exit(0 if ok else 3)
         finally:
             os._exit(4)
     _pid, status = os.waitpid(pid, 0)

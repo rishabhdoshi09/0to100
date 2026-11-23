@@ -66,8 +66,12 @@ def test_the_f1_writer_gets_the_barrier(tmp_path, darwin):
     from product import decision_freeze
 
     con = decision_freeze._connect(tmp_path / "counterfactuals.jsonl.freeze.db")
-    assert _flags(con) == (1, 1, 1)
+    # barriered checkpoints AND, since GPT C8.6-01, a full sync per commit: a freeze is durable
+    # when freeze() returns, before anything references its id (synchronous FULL = 2)
+    assert _flags(con) == (1, 1, 2)
     con.close()
+    from product import sqlite_runtime
+    sqlite_runtime.close_keepers()
 
 
 def test_the_busiest_store_keeps_its_commit_cost(tmp_path, darwin):

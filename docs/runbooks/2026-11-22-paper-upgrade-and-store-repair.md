@@ -239,8 +239,9 @@ ls $M/backup/*.$TS | wc -l                                                      
 # One chain. Every run makes and verifies a FRESH copy, so a failed copy or a ledger that changed since
 # the plan always fails (GPT V2-08). An existing copy is never deleted or overwritten: re-run after 3b,
 # it is the only off-volume pre-repair copy (cycle-8 review, part 4). OK is printed only for a REGULAR
-# file that is not a symlink, not the live ledger itself, and hashes to the plan; T starts empty here,
-# so an inherited T is never removed (GPT C8.5-08).
+# file that is not a symlink, not the live ledger itself, hashes to the plan, has no -journal and no
+# non-empty -wal beside it (rollback refuses those), and is synced with its directory; T starts empty
+# here, so an inherited T is never removed (GPT C8.5-08, C8.6-07).
 F1B=$M/backup/f1_freeze_pre_repair.db; SRC=$R/product/counterfactuals.jsonl.freeze.db; T=""
 want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.load(open(sys.argv[1]))['target_sha256'])" $M/f1_manifest.json) \
   && T=$(mktemp "$M/backup/.f1_copy.XXXXXX") \
@@ -249,6 +250,12 @@ want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.loa
   && { [ -e "$F1B" ] || [ -L "$F1B" ] || mv -n "$T" "$F1B"; } \
   && [ -f "$F1B" ] && [ ! -L "$F1B" ] && ! [ "$F1B" -ef "$SRC" ] \
   && [ "$(shasum -a 256 "$F1B" | cut -d' ' -f1)" = "$want" ] \
+  && [ ! -e "$F1B-journal" ] && [ ! -L "$F1B-journal" ] && ! [ -s "$F1B-wal" ] \
+  && /Users/apple/0to100/venv/bin/python -I -c "import os,sys,fcntl
+for p in sys.argv[1:]:
+    fd = os.open(p, os.O_RDONLY)
+    try: fcntl.fcntl(fd, fcntl.F_FULLFSYNC) if hasattr(fcntl, 'F_FULLFSYNC') else os.fsync(fd)
+    finally: os.close(fd)" "$F1B" "$M/backup" \
   && rm -f "$T" && echo "F1_BACKUP_OK: $F1B is a separate, verified copy of the planned ledger" \
   || { [ -n "$T" ] && rm -f "$T"; echo "F1_BACKUP_MISMATCH: the copy failed, the ledger changed since the stage 2 plan, or an existing $F1B is not a separate verified copy (it is kept untouched); re-plan, skip 3b"; false; }
 ```

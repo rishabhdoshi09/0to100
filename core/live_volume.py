@@ -11,13 +11,12 @@ on macOS:
   that spelling (cycle-8 review, part 4).
 
 ``on_live_volume`` answers by identity as well: the path is live when any
-prefix of it, AS SPELLED, IS ``/Volumes`` (same device and inode). Each prefix
-is resolved by the kernel itself, so ``link/..`` means what the kernel makes of
-it (symlink first, then '..'), not what textual normalization would (GPT
-C8.5-04). The walk goes from the root down and stops at the first match, so a
-spelling that reaches the mounts through ``/Volumes`` never stats anything
-inside a mounted volume (a dead USB mount can block a stat); a symlink
-component is text-checked from its link before it is followed.
+component met while resolving it, one component at a time and through every
+symlink as the kernel would, IS ``/Volumes`` (same device and inode). So
+``link/..`` means what the kernel makes of it (GPT C8.5-04), an anchor behind
+an alias of an alias is found (GPT C8.6-02), and the walk stops at the anchor,
+never stat-ing anything inside a mounted volume (a dead USB mount can block a
+stat).
 
 A spelling that only READS as /Volumes (``/Volumes/link/../x`` with the link
 pointing elsewhere) is refused too: deliberately conservative.
@@ -44,34 +43,53 @@ def _anchor_identity() -> tuple[int, int] | None:
     return (st.st_dev, st.st_ino)
 
 
-def _prefixes(raw: str) -> list[str]:
-    """``/a``, ``/a/b``, ... of ``raw`` made absolute, WITHOUT normalizing '.' or '..'."""
-    absolute = raw if raw.startswith("/") else os.getcwd().rstrip("/") + "/" + raw
-    out, current = [], ""
-    for part in absolute.split("/"):
-        if part:
-            current += "/" + part
-            out.append(current)
-    return out
+MAX_LINKS = 40                                  # as the kernel's MAXSYMLINKS
 
 
 def _identity_live(raw: str, anchor: tuple[int, int]) -> bool:
-    for prefix in _prefixes(raw):
+    """Resolve ``raw`` one component at a time, as the kernel does, and report whether ANY
+    component on the way, including those reached through symlinks, IS the anchor.
+
+    Symlinks are expanded in place (an absolute target restarts at '/'); '..' applies to
+    the resolved, symlink-free path, so a textual parent is the real one. Each component
+    is lstat-ed and compared BEFORE anything below it is touched, so an anchor hidden
+    behind an alias is found (GPT C8.6-02) and nothing inside a mount below the anchor is
+    ever stat-ed (a dead USB mount can block a stat). More than MAX_LINKS symlinks
+    (a loop) counts as live: refusing is the safe answer.
+    """
+    absolute = raw if raw.startswith("/") else os.getcwd().rstrip("/") + "/" + raw
+    pending = [part for part in absolute.split("/") if part]
+    resolved, links = "/", 0
+    while pending:
+        part = pending.pop(0)
+        if part == ".":
+            continue
+        if part == "..":
+            resolved = os.path.dirname(resolved.rstrip("/")) or "/"
+            try:
+                st = os.lstat(resolved)
+            except OSError:
+                return False
+            if (st.st_dev, st.st_ino) == anchor:
+                return True
+            continue
+        candidate = resolved.rstrip("/") + "/" + part
         try:
-            link = os.lstat(prefix)
+            st = os.lstat(candidate)
         except OSError:
-            return False                       # below here nothing exists to be the anchor
-        if S_ISLNK(link.st_mode):
-            target = os.readlink(prefix)
-            joined = target if target.startswith("/") else os.path.dirname(prefix) + "/" + target
-            if _text_live(os.path.abspath(joined)):
-                return True                    # decided before following it into a mount
-        try:
-            st = os.stat(prefix)
-        except OSError:
-            return False
+            return False                       # nothing below a missing component exists
+        if S_ISLNK(st.st_mode):
+            links += 1
+            if links > MAX_LINKS:
+                return True
+            target = os.readlink(candidate)
+            if target.startswith("/"):
+                resolved = "/"
+            pending = [p for p in target.split("/") if p] + pending
+            continue
         if (st.st_dev, st.st_ino) == anchor:
             return True
+        resolved = candidate
     return False
 
 
@@ -83,7 +101,7 @@ def on_live_volume(path: str | os.PathLike[str]) -> bool:
     anchor = _anchor_identity()
     if anchor is not None and _identity_live(raw, anchor):
         return True
-    return _text_live(os.path.realpath(raw))   # e.g. a dangling link into an absent volume
+    return _text_live(os.path.realpath(raw))   # no anchor on this host (Linux): text only
 
 
 def refuse_live(path: str | os.PathLike[str], message: str) -> Path:

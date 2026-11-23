@@ -309,14 +309,14 @@ def test_a_stalled_sender_does_not_delay_the_battery_flush():
 
     def send(_):
         sending.set()
-        release.wait(5)
+        release.wait(30)                               # held far longer than the flush may take
 
     watch = PowerWatch(send, flush=flushed.set)
     caller = threading.Thread(target=watch.observe, args=({"source": "BATTERY", "percent": 12},))
     caller.start()
     try:
-        assert sending.wait(2)
-        assert flushed.wait(0.5)
+        assert sending.wait(5)
+        assert flushed.wait(5)                         # while the send is still blocked
     finally:
         release.set()
         caller.join(2)

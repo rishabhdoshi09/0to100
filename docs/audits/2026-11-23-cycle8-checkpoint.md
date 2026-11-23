@@ -148,9 +148,34 @@ There is no further GPT loop this cycle.
 
 At about 0.5 s each, that is roughly 4 minutes on a light day and 35 minutes on a heavy one. All of it falls in background scan and paper jobs, never the UI.
 
-**Decision: the barrier stays.** It is what keeps the decision ledgers from tearing, the F1 failure itself, and the cost is acceptable for paper trading.
+**Superseded on 24 Nov (below).** The 23 Nov decision called the barrier's cost acceptable. A larger measurement found a 110 s stall, so the freeze stores now keep one idle connection per process.
 
-**Follow-up (next cycle, with review): a persistent per-thread connection for the freeze writers.** The measurement shows that makes the barrier essentially free (0.1 ms median). It changes the four freeze stores' connection lifecycle: the WAL would persist while the desk runs, and the stage-3b repair already refuses a hot WAL.
+**Re-measured 24 Nov, 01:31–01:37 IST.**
+
+- **Setup:** a throwaway `QTBench2` sparsebundle on the Expansion disk, deleted afterwards. The desk was down and the full test suite was running on the SSD, so these are loaded numbers.
+- **Each run:** n = 300 per variant, plus 60 s sustained runs.
+- **Files:** script `bench2/bench.py`, results `$M/bench_barrier2.json`.
+
+| Variant (one freeze write) | p50 | p95 | p99 | max | ops/s | 3,026 a day |
+|---|---|---|---|---|---|---|
+| Production today: connection per write, no barrier | 3.4 ms | 10 ms | 32 ms | 342 ms | 179 | ≈17 s |
+| **Candidate `2787a690`: per write + barrier** | 280 ms | 922 ms | 964 ms | 1.04 s | 2.6 | ≈19.5 min |
+| Candidate, 60 s sustained | 244 ms | 954 ms | **109.7 s** | **109.7 s** | **0.1** | (one stall) |
+| Per write + **one idle keeper** + barrier, `synchronous=NORMAL` | **0.95 ms** | 2.2 ms | 5.1 ms | 227 ms | 433 | ≈7 s |
+| Per write + keeper + barrier, `synchronous=FULL` | 85 ms | 551 ms | 760 ms | 858 ms | 7.8 | ≈6.4 min |
+| Persistent connection + barrier | 0.07 ms | 0.17 ms | 0.28 ms | 733 ms | 487 | — |
+| Bare `F_FULLFSYNC` | 58 ms | 352 ms | 614 ms | 623 ms | 11.9 | — |
+
+**Decision, final after GPT C8.6-01: row 5, a keeper plus `synchronous=FULL`.**
+
+- **What it is:** `sqlite_runtime.keep_open` holds one idle keeper connection per process and freeze store. It is pid-keyed, capped at 8 per process, reset in a forked child, and closed at exit.
+- **Why the keeper:** a per-write close is then not the last close, so it no longer pays a barriered checkpoint. That checkpoint caused the 280 ms p50 and the 110 s stall.
+- **Why `FULL`:** each freeze commit is one `F_FULLFSYNC` of the WAL, so a freeze is **durable when `freeze()` returns**.
+- **Why that matters:** the counterfactual JSONL references the freeze's id at once, and a reference must never outlive its freeze in a power cut. Row 4 (`NORMAL`, 0.95 ms) fails that test: its commits sit in unsynced WAL. `2cf44fc0` had chosen it, and GPT caught it.
+- **Cost:** p50 85 ms, p99 760 ms and max 0.86 s per freeze. That is about 6.4 minutes on a 3,026-freeze day, in background paper and scan jobs, with no 110 s stall in its sustained run.
+- **The barrier still holds:** every checkpoint is still barriered.
+- **The next step is group commit:** one barrier per scan's batch of freezes. It belongs with the O(n²) ledger deduplication fix (Open), on the same code path.
+- **The WAL now persists while the desk runs.** A clean stop checkpoints it, while a killed desk leaves it for the next opener. The repair tool's `plan` refuses a hot WAL, so stage 3b still needs the desk cleanly stopped.
 
 ## 6d. Host events after the close (23 Nov)
 
@@ -163,11 +188,118 @@ At about 0.5 s each, that is roughly 4 minutes on a light day and 35 minutes on 
 
 **Two more paper cycles were orphaned** (10:47 and 15:02). They were retired correctly as `ORPHANED_PAPER_CYCLE_RESTART`.
 
-## 7. Verification
+**Later that evening (evidence: `pmset -g log`, `/Library/Logs/DiagnosticReports/Kernel-2026-11-23-212503.panic`):**
+
+| When (IST) | Event |
+|---|---|
+| ~21:04 | The charger came out. At 21:05:11 the Mac was **awake on battery at 100%**, and the Seagate was absent from the USB bus. It sits directly on the bus, with no hub |
+| 21:05:18 | **Kernel panic** `wire_count == 0 @vm_pageout.c:7661`, with `com.apple.driver.DiskImages` in the backtrace. A desk process was inside a WAL commit's `F_FULLFSYNC` at that moment |
+| 21:24–21:25 | Reboot. Battery health flipped to "Poor / Check Battery" (capacity 65%). launchd restarted the desk by itself, and storage re-attached |
+| 22:14–22:33 | The stage 2 store re-plan ran and passed (section 7). The 21:00 run had been cut by the drop (EIO on `13012025.csv`) |
+| 22:40:10 | Clamshell sleep on battery (45%). The WORKING image was left attached but unmounted, and the desk was down from then on |
+
+**Findings.**
+
+- **A USB drop is now a whole-machine crash.** On this macOS 12.7.6 host, the drive leaves the bus on the AC→battery switch, even with the lid open and the Mac awake. A degraded battery that cannot carry the bus-powered HDD's transient is a plausible cause, not yet proven. The disk-image driver then panicked the kernel.
+- **No software fix exists on this host.** The remedies are physical: keep the charger in, use a powered hub or self-powered disk, service the battery, or move the runtime to internal storage.
+- **The pickle survived.** `store_cache.pkl` read `e5accf5a…ffe0dbfa` before and after both events.
+
+## 6e. Two independent reviews of `6ebb95bf..62750347` (GPT C8-01..07 and a Claude subagent)
+
+Every finding was reproduced by a failing test first, and all are fixed in `2787a690`. The tests are in `tests/test_cycle8_part4.py`, which maps each finding to its test. Targeted mutants: **15 of 15 killed.**
+
+| Finding | Severity | Fix |
+|---|---|---|
+| **C8-01** An edited manifest makes rollback install another database | P0 | Rows, schema, settings and foreign keys are compared database to database, never through the manifest |
+| **C8-02** A verified file was re-opened by name: the restore source, and a lock release through a hard link | P0 | The live proof is diagnosed in memory, from one read through the pinned descriptor. The backup is written `O_EXCL\|O_NOFOLLOW` and verified through its own descriptor. Rollback restores from the in-memory connection it proved |
+| **C8-03** A manifest directory or the target is swapped after the checks | P0 | The manifest is resolved once and must be `.json` outside the database's directory. The pin opens `O_NOFOLLOW` on the checked inode |
+| **C8-04** A hard-linked target hides committed WAL frames | P0 | `st_nlink != 1` is refused |
+| **C8-05** A header mismatch plus a crash after COMMIT strands recovery | P2 | The trial proof is recorded before COMMIT |
+| **C8-06** A crash during the backup write leaves an untracked file | P2 | The backup is written at its recorded name (refined in 6f) |
+| **C8-07** A stalled flush blocks the battery warning | P1 | The flush runs in its own thread, one at a time |
+| **S-2** A rollback-journal target cannot recover after a hard crash | P2 | Only WAL databases are planned |
+| **S-4** Re-running the stage-3 block deletes the verified SSD copy | P2 | A fresh copy every run; an existing copy is never deleted |
+| **S-5** `..` is collapsed as text before symlinks resolve | P2 | `..` is refused |
+| **S-6** `/System/Volumes/Data/Volumes/...` defeats every `/Volumes` guard | P2 | `core/live_volume.py` answers by identity; 9 guards route through it, and a test forbids new text-only checks |
+
+## 6f. GPT review of the 6e fixes (`62750347..2787a690`, C8.5-01..10)
+
+All 10 are reproduced and fixed in `2cf44fc0`, with tests in `tests/test_cycle8_part5.py`. Mutants: **16 of 17 killed, plus 3 of 3 re-run after strengthening**. The one survivor is an equivalent mutant: a redundant belt-and-braces read.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| **C8.5-01** Partial-backup cleanup deletes whatever an edited manifest names | P0 | Nothing is ever deleted. Earlier attempts' files are recorded in `earlier_backups` |
+| **C8.5-02** `WITHOUT ROWID` rows escape the rollback's row proof | P0 | Rollback refuses unsupported objects on either side |
+| **C8.5-03** `_fsync_dir` opens a name that a swap can point at the database | P0 | `O_DIRECTORY\|O_NOFOLLOW` |
+| **C8.5-04** `on_live_volume` normalized `..` before resolving | P0 | The identity walk follows the spelling as given, in kernel order. Guards check before resolving |
+| **C8.5-05** The trial flag let rollback ignore any later header write | P1 | The flag is bound to the attempt. Rollback accepts only the header apply observed after its own proven commit, and WAL is checked through the pin before SQLite opens the file |
+| **C8.5-06** A matching pending backup was reused without being synced | P1 | Never reused: every attempt writes and syncs its own |
+| **C8.5-07** The manifest was re-resolved after the guards | P1 | Resolved once; `..` is refused everywhere |
+| **C8.5-08** The stage-3 block certified a symlinked copy and trusted an inherited `T` | P1 | `T` starts empty. OK only for a separate regular file (`-ef`), verified after publication |
+| **C8.5-09** A slow alert send delayed the flush | P2 | The flush starts first |
+| **C8.5-10** The audit test's window opened late | P2 | The window opens at the maintenance connection, and opens are classified by their flags |
+
+## 6g. GPT review of the 6f fixes (`2787a690..2cf44fc0`, C8.6-01..09)
+
+All 9 are reproduced and fixed, with tests in `tests/test_cycle8_part6.py`. Mutants: **10 of 10 killed.**
+
+| Finding | Severity | Fix |
+|---|---|---|
+| **C8.6-01** The keeper left a returned freeze in unsynced WAL | P0 | `synchronous=FULL` with `F_FULLFSYNC`: durable at return (6c) |
+| **C8.6-02** An anchor behind an alias of an alias escaped the live-volume walk | P0 | A component-wise resolver: every component met through every symlink is compared with the anchor, and a loop (over 40 links) is refused |
+| **C8.6-03** A header first seen after a restart could authorize rollback over a later write | P2 | Apply records `applied_unverified` with no acceptable header, so an automatic rollback refuses and the repaired database stands |
+| **C8.6-04** v2 manifests carry other recovery semantics | P2 | Manifest version 3; older manifests are refused, so re-plan. **The 23 Nov stage-2 F1 manifest is v2: stage 2 must be re-run with the final candidate** |
+| **C8.6-05** A fork with the keeper registry locked hangs the child | P2 | An at-fork reset: fresh lock and registry; inherited connections are parked, never used or closed |
+| **C8.6-06** `_full_fsync` downgraded an `EIO` to a plain fsync | P2 | It falls back only for unsupported (`EINVAL`/`ENOTSUP`/`ENOTTY`); everything else is raised |
+| **C8.6-07** The stage-3 block certified a copy that rollback refuses (a `-journal` or non-empty `-wal` beside it) | P2 | Sidecars are checked as rollback checks them; the copy and its directory are synced before OK |
+| **C8.6-08** A failed flush-thread start suppressed the battery alert | P2 | Reported; the alert and the state update proceed |
+| **C8.6-09** The audit window ignored a second SQLite open of the target | P2 | The arming connect is consumed once |
+
+**Also found and fixed in this round: the broker lane trusted any passed auth check, however old.** That is invariant 2.
+
+- **Evidence:** on 23 Nov it showed `SESSION_VALID` from the 09:30 check all evening. After the next 06:00 IST token rollover it would still have said READY and `execution_ready`.
+- **Fix:** a passed check now counts only until the next 06:00 IST after it. Before that rollover the lane shows `CHECKING` / `STALE`, not ready, and an unreadable time fails closed.
+- **History:** the same bug was fixed on 18 Nov in `autonomous_loop._live_broker`, but not here.
+- **Tests:** `tests/test_broker_readiness.py`.
+
+## 7. Stage 2, evening (23 Nov, read-only)
+
+The F1 plan of the live ledger ran at 20:59. The store re-plan ran 22:14–22:33 with the code exported from `62750347`.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Store plan | **PASS** | `ready` true, 11/11 gates, state `planned`, rc 0 |
+| Diff against the 22 Nov dry run | **PASS** | −22 / +665 / 0, identical. Today's rows are already in the live pickle |
+| `target_sha256` equals the live pickle | **PASS** | `e5accf5a…ffe0dbfa`, before and after the run |
+| Today's archive included | **PASS** | `23112026.csv` (sha `2e0ccd57…`) among 1,763 verified archives; `last_day` 2026-11-23 |
+| F1 plan of the live ledger | **PASS** | `planned`, ready, 11/11. 4 stale entries (rowids 5684–5687), 0 missing, 6,832 rows. Target sha `7085b4aa…`; size and mtime unchanged by the plan |
+| §0 preflight, re-run 24 Nov 01:22 | **FAIL** (host) | Storage unmounted since the 22:40 clamshell sleep, health unanswered, `host_verdict` UNHEALTHY. PASS: outside hours, AC, checkout clean at `125880a6`, FF to the candidate, live LOCKED, launchd jobs |
+| Running jobs during the plan | **UNKNOWN**, mitigated | No `jobs.db` snapshot was taken 22:14–22:33. The plan's `target_unchanged_during_plan` gate held |
+| Candidate CI | **PASS** | 5/5 at `62750347`, 5/5 at `2787a690` |
+| Plans made with the final candidate | **BLOCKED** | Both plans used `62750347`. The F1 manifest is v2, which the final tool refuses by design. Re-run stage 2 (read-only) with the final SHA once the volume is mounted |
+
+The aborted 21:00 run's staging (`$M/staging`) is kept as evidence; the re-plan used `$M/staging_r2`.
+
+## 8. F1 on the real ledger with the final code (24 Nov, isolated SSD copies)
+
+**Source:** the 20:59 plan's byte copy of the live ledger (sha `7085b4aa…`). The decision ledger is the 20 Nov copy, with 6,110 `canonical_freeze_id`s.
+
+| Step | Result |
+|---|---|
+| Plan | READY, 11/11, 4 stale (rowids 5684–5687), 0 missing |
+| Apply | `applied`, proven before COMMIT, byte-identical to the plan, integrity `ok` |
+| Rollback | `rolled_back`; content equals the original |
+| Re-apply | `applied`; a third apply is a no-op |
+| Hard crash inside the transaction (`os._exit`) | Recovers to `applied` |
+| Hard crash after COMMIT | Recovers to `applied` |
+| Addressability, after every step | 0 keys resolve to another row; 6,110 / 6,110 ledger ids resolve through the index |
+
+## 9. Verification
 
 - Targeted regression (140 files touching the changed stores): 139 passed. The 140th was the repair file, caught mid-rework; it passes now.
 - The affected files listed in the commit messages all pass.
-- The full suite and CI are in the #333 report.
+- **The full guarded suite at `2787a690`:** 520 files, 0 failing, at least 5,286 tests passed and 2 skipped. The 36 files whose count was masked are counted exactly in the `2cf44fc0` run.
+- The full suite at the final head and its CI are in the #333 report.
 
 ## Open
 
@@ -179,7 +311,18 @@ At about 0.5 s each, that is roughly 4 minutes on a light day and 35 minutes on 
   - `apply counterfactual migration`;
   - live, which stays HARD-LOCKED.
 - **P0 host operations.** Power and lid: three AutoPowerOffs and two lid-close losses in five days. After the 20 Nov AutoPowerOff the USB disk did not remount: the desk failed its storage preflight from 10:57 to 23:37 (18,885 such failures in all), and from 14:37 the host was also in clamshell sleep, during market hours.
+- **P0 host (24 Nov):**
+  - the USB drive leaves the bus on the AC→battery switch, and the disk-image driver then **panics the kernel**;
+  - battery health is "Poor";
+  - the desk has been down since the 22:40 clamshell sleep. The recovery is a plain detach, which awaits the owner's words.
 - **P1 engineering:**
-  - measure the barrier's cost on the USB stack;
+  - **storage self-recovery cannot clear a stale attach.** The preflight re-attaches an image that is attached but unmounted, and against a stale helper that fails forever. **Proposed:** after `diskutil mount` of the image's volume fails, detach exactly the configured image's device, then attach.
+    - **Safe because:** never another image, never a mounted one.
+    - **Why it waits:** this changes a deliberately fail-closed gate, races any attach in flight, and needs the owner's decision;
+  - group commit for decision freezes (6c);
+  - `counterfactual_learning.freeze_decision` re-reads the whole 32 MB ledger to deduplicate every write, which is O(n²) per scan, in production today;
   - a measured durability policy for rollback-journal stores and JSONL ledgers.
-- **P2:** `/api/product-readiness` took 12.7 s and `/api/autonomy-desk` 8.4 s during market hours; profile them on a copy.
+- **P2:**
+  - `/api/product-readiness` took 12.7 s and `/api/autonomy-desk` 8.4 s during market hours; profile them on a copy;
+  - the Kite session check shown as READY was from 09:30;
+  - the two Nifty readings disagree (+1.122% on the market panel, −1.406% in the F&O context).

@@ -97,8 +97,13 @@ class PowerWatch:
             self.flushes_skipped_busy += 1       # the last one is still stuck: never pile up more
             return
         self.last_flush = self.now()
-        self.flush_thread = threading.Thread(target=self._run_flush, name="quantterm-runtime-flush", daemon=True)
-        self.flush_thread.start()
+        thread = threading.Thread(target=self._run_flush, name="quantterm-runtime-flush", daemon=True)
+        try:
+            thread.start()
+        except RuntimeError as exc:            # no thread could be created: the alert must still go out
+            print(f"[HOST POWER] runtime flush not started: {exc}", file=sys.stderr, flush=True)
+            return
+        self.flush_thread = thread
 
     def observe(self, power: dict[str, Any] | None) -> str | None:
         if not power:
