@@ -99,7 +99,7 @@ def test_the_audit_sees_stale_index_entries_that_quick_check_misses(tmp_path: Pa
     full = audit_database(db)
     assert full.readonly.check == "integrity_check" and not full.readonly.ok
     assert "wrong # of entries in index sqlite_autoindex_freezes_1" in full.readonly.result
-    assert full.classification == "BASE_FILE_UNREADABLE_OR_INTEGRITY_FAILURE"
+    assert full.classification == "LIVE_VIEW_INTEGRITY_FAILURE"          # opened, and failed (GPT F1-07)
     assert summary([full])["needs_investigation"] == 1
     quick = audit_database(db, quick=True)                  # the documented blind spot
     assert quick.readonly.ok and quick.classification == "READONLY_OK"

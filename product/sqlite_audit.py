@@ -16,6 +16,13 @@ skips the comparison of index entries with table rows by design, so it reports
 finding F1 (22-23 Nov 2026: the decision-freeze ledger passed quick_check and
 was classified READONLY_OK). ``quick=True`` remains available for a fast pass
 and says what it cannot see.
+
+A live view that opens and reports a diagnostic is an integrity failure, never a
+sidecar constraint, even when the immutable base passes: the damage may sit in
+the WAL (GPT F1-07, cycle 8). Measured limit (SQLite 3.45): ``integrity_check``
+on a read-only connection does not verify CHECK constraints; a read-write
+connection does. The audit stays read-only, so CHECK violations are out of its
+reach.
 """
 from __future__ import annotations
 
@@ -88,14 +95,27 @@ def _quick_check(path: Path, *, immutable: bool = False) -> Probe:
     return _check(path, immutable=immutable, quick=True)
 
 
+NEEDS_INVESTIGATION = ("BASE_FILE_UNREADABLE_OR_INTEGRITY_FAILURE", "LIVE_VIEW_INTEGRITY_FAILURE")
+
+
 def classify(*, readonly_ok: bool, immutable_ok: bool, wal_present: bool,
-             check: str = "integrity_check") -> tuple[str, str]:
-    """Classify probe results without overstating what immutable mode proves."""
+             check: str = "integrity_check", readonly_diagnostic: bool = False) -> tuple[str, str]:
+    """Classify probe results without overstating what immutable mode proves.
+
+    ``readonly_diagnostic``: the normal read-only open SUCCEEDED and the check
+    returned diagnostics (as opposed to the open or the check raising).
+    """
     if readonly_ok:
         note = f"Read-only {check} succeeded against SQLite's normal live view."
         if check == "quick_check":
             note += " " + QUICK_CHECK_LIMIT + "."
         return "READONLY_OK", note
+    if readonly_diagnostic:
+        return (
+            "LIVE_VIEW_INTEGRITY_FAILURE",
+            f"The normal read-only view (including any WAL) opened and failed {check}. "
+            "This is an integrity failure, not a sidecar constraint, even if the base file passes.",
+        )
     if immutable_ok and wal_present:
         return (
             "WAL_READONLY_SIDECAR_CONSTRAINT",
@@ -128,6 +148,7 @@ def audit_database(path: str | Path, *, quick: bool = False) -> DatabaseAudit:
         immutable_ok=immutable.ok,
         wal_present=wal,
         check=readonly.check,
+        readonly_diagnostic=(not readonly.ok and not readonly.error),
     )
     try:
         size = int(target.stat().st_size)
@@ -171,10 +192,7 @@ def summary(rows: Iterable[DatabaseAudit]) -> dict[str, object]:
         "check": checks[0] if len(checks) == 1 else checks,
         "limit": QUICK_CHECK_LIMIT if "quick_check" in checks else "",
         "classifications": counts,
-        "needs_investigation": sum(
-            1 for row in items
-            if row.classification == "BASE_FILE_UNREADABLE_OR_INTEGRITY_FAILURE"
-        ),
+        "needs_investigation": sum(1 for row in items if row.classification in NEEDS_INVESTIGATION),
         "readonly_failures": sum(1 for row in items if not row.readonly.ok),
         "immutable_base_failures": sum(1 for row in items if not row.immutable_base.ok),
     }
