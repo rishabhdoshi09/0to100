@@ -50,9 +50,17 @@ def db_path(path: Path | None = None) -> Path:
 
 
 def _connect(path: Path | None = None) -> sqlite3.Connection:
-    from product.sqlite_runtime import connect
+    from core.atomic_io import make_sqlite_durable
+    from product.sqlite_runtime import connect, keep_open
 
     con = connect(db_path(path))
+    # A candidate transition is durable at commit: the official settlement clears the
+    # flag that would replay a close right after the close commits, so a close lost to a
+    # power cut would never be redone (lifecycle audit F6). FULL + F_FULLFSYNC per commit;
+    # the keeper keeps each close from also paying a barriered checkpoint.
+    con.execute("PRAGMA synchronous=FULL")
+    make_sqlite_durable(con)
+    keep_open(db_path(path))
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS candidates (

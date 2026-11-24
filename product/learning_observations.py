@@ -103,8 +103,13 @@ def _connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=FULL")
-    from core.atomic_io import make_sqlite_checkpoint_safe
-    make_sqlite_checkpoint_safe(conn)   # checkpoint barriers on macOS (finding F1)
+    # Claims and applications must reach stable storage BEFORE the policy and ledger writes
+    # that follow them: with every write in the chain a real barrier, a power cut can only
+    # lose a SUFFIX of it, never apply a policy whose claim was lost (lifecycle audit F2,
+    # 24 Nov: one observation credited twice). FULL + F_FULLFSYNC per commit, barriered
+    # checkpoints (make_sqlite_checkpoint_safe alone adds F_FULLFSYNC only below FULL).
+    from core.atomic_io import make_sqlite_durable
+    make_sqlite_durable(conn)
     if _schema_current(conn):
         return conn
     # Create / migrate under ONE write transaction: two processes opening a

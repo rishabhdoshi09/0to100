@@ -99,7 +99,8 @@ def save_policies(payload: Mapping[str, Any], path: str | Path | None = None) ->
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     data["live_locked"] = True
     from core.atomic_io import atomic_write_text
-    atomic_write_text(target, json.dumps(data, indent=2, default=str))
+    # durable: a barrier between the learning claim before it and the ledger rewrite after it
+    atomic_write_text(target, json.dumps(data, indent=2, default=str), durable=True)
     return target
 
 

@@ -384,7 +384,7 @@ def ingest_closed_book(book, *, path=None, floors: Mapping[str, int] | None = No
         "applied": applied,
     }
     from core.atomic_io import atomic_write_text
-    atomic_write_text(target, json.dumps(payload, indent=2))
+    atomic_write_text(target, json.dumps(payload, indent=2), durable=True)    # the dedupe keys (audit F2)
     if failures:
         raise failures[0]
     return {"applied": applied, "last_policy": last}
@@ -709,7 +709,7 @@ def _queue_unverified_fills(symbol: str, entry_day: str) -> int:
                 changed += 1
         if changed:
             from core.atomic_io import atomic_write_text
-            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rows))
+            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rows), durable=True)
         return changed
 
 
@@ -768,7 +768,7 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
             changed = True
         if changed:
             from core.atomic_io import atomic_write_text
-            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
+            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten), durable=True)
         return out
 
 
@@ -870,7 +870,7 @@ def settle_pending_counterfactuals(
             classifications[cls] = classifications.get(cls, 0) + 1
         if updated:
             from core.atomic_io import atomic_write_text
-            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
+            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten), durable=True)
         return {"updated": updated, "classifications": classifications}
 
 
