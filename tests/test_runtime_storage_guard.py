@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -271,3 +272,80 @@ def test_host_entrypoint_restarts_supervisor_after_latched_storage_loss(
     assert calls["count"] == 2
     assert guard.recoveries == 1
     assert __import__("os").environ["QT_RUNTIME_ROOT_REQUIRE_EXISTING"] == "1"
+
+
+# ── 24 Nov 2026: a capped backoff between recovery attempts ──
+
+class _RecordingShutdown:
+    """Stands in for the guard's shutdown event: records each wait, never set."""
+
+    def __init__(self):
+        self.waits: list[float] = []
+
+    def is_set(self) -> bool:
+        return False
+
+    def set(self) -> None:
+        pass
+
+    def wait(self, seconds: float) -> bool:
+        self.waits.append(seconds)
+        return False
+
+
+def test_recovery_attempts_back_off_to_a_ceiling(tmp_path: Path):
+    import product.runtime_storage_guard as storage_module
+
+    guard = RuntimeStorageGuard(root=_runtime(tmp_path / "runtime"), interval_s=15.0)
+    guard.shutdown = _RecordingShutdown()  # type: ignore[assignment]
+    attempts = {"n": 0}
+
+    def prepare() -> None:
+        attempts["n"] += 1
+        raise RuntimeError("preflight failed: external volume is not mounted")
+
+    def stop() -> bool:
+        return attempts["n"] >= 8
+
+    assert guard.wait_until_recovered(prepare=prepare, should_stop=stop) is False
+    assert guard.shutdown.waits == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 60.0, 60.0]
+    assert storage_module.RECOVERY_MAX_WAIT_S == 60.0
+    assert "external volume is not mounted" in guard.last_error
+
+
+def test_a_service_stop_interrupts_a_long_recovery_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import product.runtime_storage_guard as storage_module
+
+    monkeypatch.setattr(storage_module, "RECOVERY_MAX_WAIT_S", 600.0)
+    guard = RuntimeStorageGuard(root=_runtime(tmp_path / "runtime"), interval_s=15.0)
+    monkeypatch.setattr(guard, "check", lambda: False)
+    threading.Timer(0.5, guard.close).start()           # what the entrypoint's SIGTERM handler does
+    started = time.monotonic()
+    assert guard.wait_until_recovered() is False
+    assert time.monotonic() - started < 5.0             # not the 5-600 s wait
+
+
+def test_recovery_succeeds_as_soon_as_storage_is_back(tmp_path: Path):
+    guard = RuntimeStorageGuard(root=_runtime(tmp_path / "runtime"), interval_s=15.0)
+    guard.shutdown = _RecordingShutdown()  # type: ignore[assignment]
+    guard.lost.set()
+    outcomes = iter([False, False, True])
+    guard.check = lambda: next(outcomes)  # type: ignore[assignment]
+    assert guard.wait_until_recovered() is True
+    assert guard.shutdown.waits == [5.0, 10.0] and guard.lost.is_set() is False
+
+
+def test_a_failing_identity_check_backs_off_to_the_same_ceiling(tmp_path: Path):
+    """The preflight passes but the adopted runtime's identity does not (e.g. another image
+    at the mount point): the same capped backoff, never a hot loop."""
+    guard = RuntimeStorageGuard(root=_runtime(tmp_path / "runtime"), interval_s=15.0)
+    guard.shutdown = _RecordingShutdown()  # type: ignore[assignment]
+    checks = {"n": 0}
+
+    def check() -> bool:
+        checks["n"] += 1
+        return False
+
+    guard.check = check  # type: ignore[assignment]
+    assert guard.wait_until_recovered(prepare=lambda: None, should_stop=lambda: checks["n"] >= 7) is False
+    assert guard.shutdown.waits == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 60.0]

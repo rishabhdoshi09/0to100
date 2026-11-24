@@ -20,6 +20,8 @@ from core.runtime_paths import runtime_root
 
 MANIFEST_REL = Path("state") / "host_runtime_manifest.json"
 DEFAULT_INTERVAL_S = 15.0
+#: The longest wait between recovery attempts during an outage (seconds).
+RECOVERY_MAX_WAIT_S = 60.0
 
 
 class RuntimeStorageUnavailable(RuntimeError):
@@ -171,6 +173,13 @@ class RuntimeStorageGuard:
         happens afterwards and remains the authority for clearing the latched
         loss event.
         """
+        # A capped backoff: the first retries stay fast (a USB reset clears in seconds), a
+        # long outage settles at RECOVERY_MAX_WAIT_S. Each ``prepare`` is a whole storage
+        # preflight (bash, hdiutil, diskutil); at a fixed 5 s it kept an old host busy for
+        # an entire overnight outage (24 Nov: 9,836 failed attempts' I/O errors). The wait
+        # is on ``shutdown``, so a service stop is never delayed by it.
+        delay = min(5.0, self.interval_s)
+        ceiling = max(delay, RECOVERY_MAX_WAIT_S)
         while not self.shutdown.is_set() and not (should_stop and should_stop()):
             if prepare is not None:
                 try:
@@ -179,13 +188,22 @@ class RuntimeStorageGuard:
                     self.last_error = (
                         f"runtime recovery preparation failed: {type(exc).__name__}: {exc}"
                     )[:500]
-                    time.sleep(min(5.0, self.interval_s))
+                    self._pause(delay)
+                    delay = min(ceiling, delay * 2)
                     continue
             if self.check():
                 self.lost.clear()
                 return True
-            time.sleep(min(5.0, self.interval_s))
+            self._pause(delay)
+            delay = min(ceiling, delay * 2)
         return False
+
+    def _pause(self, seconds: float) -> None:
+        wait = getattr(self.shutdown, "wait", None)
+        if callable(wait):
+            wait(seconds)
+        else:
+            time.sleep(seconds)
 
     def close(self) -> None:
         self.shutdown.set()
