@@ -1203,8 +1203,9 @@ def run_reco_paper_cycle(
             # canonical Decision: its id names that feature observation (QT-06).
             decision.feature_decision_id = str(evidence.get("decision_id") or "")
             decision.feature_scan_id = str(payload.get("scan_scanned_at") or day)
-        except Exception:
-            pass
+        except Exception as exc:
+            from product.counterfactual_learning import note_recording_failure
+            note_recording_failure("decision freeze", str(getattr(decision, "symbol", "") or ""), exc)
 
     ranked: list[tuple[float, AutopilotDecision]] = []
     certified = _current_scan_certificate(payload) if cards is None else None
@@ -1546,8 +1547,9 @@ def run_reco_paper_cycle(
         try:
             from product.paper_learning_loop import note_later_entry
             note_later_entry(decision.symbol, path=policy_path, as_of=day)
-        except Exception:
-            pass
+        except Exception as exc:
+            from product.counterfactual_learning import note_recording_failure
+            note_recording_failure("later-entry credit", str(decision.symbol), exc)
         if not in_lock_saved:
             # Undurable exposure is invisible to the other books' risk read;
             # open nothing more. The boundary below re-saves and reports.
@@ -1630,8 +1632,9 @@ def run_reco_paper_cycle(
                     "verdict": row.get("verdict"),
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            from product.counterfactual_learning import note_recording_failure
+            note_recording_failure("counterfactual freeze", str(row.get("symbol") or ""), exc)
 
     final = ENTER_NOW if taken else (WAIT if waits and not rejections else NO_TRADE)
     if not card_list and not taken:

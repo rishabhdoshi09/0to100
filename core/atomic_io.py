@@ -124,6 +124,53 @@ def atomic_write_with(
     return _replace_with(Path(path), fill, mode="w", encoding=encoding, newline=newline, fsync=fsync)
 
 
+def quarantine_torn_jsonl_tail(path: str | Path) -> Path | None:
+    """Recover a JSONL ledger whose LAST line was cut by a crash; call it under the writer lock.
+
+    An append-only ledger written with plain appends can be left with an unterminated,
+    unparseable final line. Every reader that validates lines then refuses the whole file,
+    and the pipeline behind it stops for good (lifecycle audit F3/F5, 24 Nov). This moves
+    exactly those trailing bytes to a durable ``<name>.torn-<stamp>`` sidecar (kept for
+    forensics, never deleted) and truncates the ledger to its last complete line, syncing
+    each step. A complete last line, even one missing its newline, is left alone, and so is
+    any invalid line BEFORE the last: that is corruption, not an interrupted append, and the
+    reader must keep refusing it. Returns the sidecar path, or None when nothing was cut.
+    """
+    import json
+    import time
+    import uuid
+
+    target = Path(path)
+    try:
+        raw = target.read_bytes()
+    except FileNotFoundError:
+        return None
+    if not raw or raw.endswith(b"\n"):
+        return None
+    cut = raw.rfind(b"\n") + 1
+    tail = raw[cut:]
+    try:
+        json.loads(tail.decode("utf-8"))
+        return None                                # a complete row: not torn
+    except (UnicodeDecodeError, ValueError):
+        pass
+    side = target.with_name(f"{target.name}.torn-{time.strftime('%Y%m%d_%H%M%S')}-{uuid.uuid4().hex[:8]}")
+    fd = os.open(str(side), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        os.write(fd, tail)
+        durable_sync(fd)
+    finally:
+        os.close(fd)
+    _sync_directory(side.parent)
+    with target.open("r+b") as fh:
+        fh.truncate(cut)
+        fh.flush()
+        durable_sync(fh.fileno())
+    print(f"[LEDGER] quarantined a torn last line of {target.name} ({len(tail)} bytes) to {side.name}",
+          file=sys.stderr, flush=True)
+    return side
+
+
 def make_sqlite_durable(connection: Any) -> None:
     """Ask SQLite for real stable-storage syncs on macOS (``F_FULLFSYNC``).
 

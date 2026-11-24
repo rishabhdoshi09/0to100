@@ -185,6 +185,9 @@ def _recover_append(path: Path) -> None:
             raise ValueError("invalid append dimensions")
         if sha256(suffix).hexdigest() != intent["suffix_sha256"]:
             raise ValueError("append payload checksum mismatch")
+        row = json.loads(suffix.decode("ascii"))
+        if not isinstance(row, dict):
+            raise ValueError("append payload is not one row")
     except (KeyError, TypeError, AttributeError, ValueError) as exc:
         raise ValueError(f"invalid counterfactual ledger append intent {intent_path}") from exc
 
@@ -192,12 +195,20 @@ def _recover_append(path: Path) -> None:
         current = path.read_bytes()
     except FileNotFoundError:
         current = b""
-    if (len(current) < offset or sha256(current[:offset]).hexdigest() != prefix_sha256
-            or not suffix.startswith(current[offset:])):
-        raise ValueError(f"counterfactual ledger differs from append intent {intent_path}")
-
-    _sync_append_directory(intent_path)
-    _finish_append(path, suffix[len(current) - offset:])
+    if (len(current) >= offset and sha256(current[:offset]).hexdigest() == prefix_sha256
+            and suffix.startswith(current[offset:])):
+        _sync_append_directory(intent_path)
+        _finish_append(path, suffix[len(current) - offset:])
+        return
+    # The ledger no longer matches the intent. Every rewrite is durable before the next write
+    # (lifecycle audit F2), so a power cut cannot produce this: the ledger was edited or
+    # restored outside the protocol. Appending onto it would trust an unknown file, so this
+    # refuses, loudly: the producers log it (audit F3) and the message says what to do.
+    raise ValueError(
+        f"counterfactual ledger differs from append intent {intent_path}: the ledger was changed "
+        f"outside its writers (an edit or a restore). Keep both files; restore the ledger that "
+        f"matches the intent, or append row {row.get('counterfactual_id')!r} by hand and remove the intent"
+    )
 
 
 def _append_frozen_row(path: Path, prefix: bytes, row: Mapping[str, Any]) -> None:
@@ -224,11 +235,24 @@ def locked_ledger(path: str | Path | None = None) -> Iterator[tuple[Path, list[d
     """Read a validated snapshot under the lock shared by appenders and settlers."""
     from product.learning_observations import writer_lock
 
+    from core.atomic_io import quarantine_torn_jsonl_tail
+
     target = ledger_path(path)
     with writer_lock(target):
-        _recover_append(target)
+        _recover_append(target)                  # an append this code began: finished or placed
+        quarantine_torn_jsonl_tail(target)       # an older append cut by a crash (lifecycle audit F3)
         rows, prefix = _read_ledger(target)
         yield target, rows, prefix
+
+
+def note_recording_failure(stage: str, symbol: str, exc: BaseException) -> None:
+    """Counterfactual bookkeeping never blocks a paper decision, but a failure is never silent:
+    a refused ledger (an invalid line, a stale intent) used to vanish into ``pass`` at every
+    producer while learning stopped (lifecycle audit F3, 24 Nov)."""
+    import sys
+
+    print(f"[COUNTERFACTUAL] {stage} failed for {symbol}: {type(exc).__name__}: {str(exc)[:300]}",
+          file=sys.stderr, flush=True)
 
 
 def _counterfactual_freeze_path(path: str | Path | None) -> Path:

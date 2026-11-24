@@ -64,7 +64,7 @@ def _freeze_rejection(ledger, decision_id="rejected-1"):
     )
 
 
-@pytest.mark.parametrize("tail", [b'{"torn":', b'[]\n', b'\xff\n'])
+@pytest.mark.parametrize("tail", [b'[]\n', b'\xff\n'])
 def test_counterfactual_freeze_refuses_to_append_to_corrupt_ledger(tmp_path, tail):
     ledger = tmp_path / "counterfactuals.jsonl"
     first = _freeze_rejection(ledger)
@@ -74,6 +74,21 @@ def test_counterfactual_freeze_refuses_to_append_to_corrupt_ledger(tmp_path, tai
         _freeze_rejection(ledger)
     assert ledger.read_bytes() == original
     assert DF.get_freeze("rejected-1", path=CF._counterfactual_freeze_path(ledger))["fingerprint"] == first["decision_fingerprint"]
+
+
+def test_counterfactual_freeze_recovers_a_torn_last_line_and_keeps_its_bytes(tmp_path):
+    """RECONCILED (Claude, 24 Nov; lifecycle audit F3). An unterminated, unparseable LAST line
+    can only be an append cut by a crash; the deployed code appends without an intent, so a
+    production ledger may already carry one. Refusing it stopped learning at the first freeze.
+    The bytes are kept exactly in a sidecar (never lost); a COMPLETE invalid line is still
+    refused above, as corruption."""
+    ledger = tmp_path / "counterfactuals.jsonl"
+    first = _freeze_rejection(ledger)
+    ledger.write_bytes(ledger.read_bytes() + b'{"torn":')
+    second = _freeze_rejection(ledger, "rejected-2")
+    assert [json.loads(line) for line in ledger.read_bytes().splitlines()] == [first, second]
+    sides = list(tmp_path.glob("counterfactuals.jsonl.torn-*"))
+    assert len(sides) == 1 and sides[0].read_bytes() == b'{"torn":'
 
 
 def test_counterfactual_freeze_appends_after_valid_unterminated_row(tmp_path):

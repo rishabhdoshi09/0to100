@@ -51,6 +51,21 @@ def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
         fh.write(json.dumps(dict(row), default=str) + "\n")
 
 
+def _append_jsonl_durable(path: Path, row: Mapping[str, Any]) -> None:
+    """An append the settlement audit must be able to read back: one write, synced. A crash can
+    still cut it, which quarantine_torn_jsonl_tail recovers under the same lock (audit F5)."""
+    from core.atomic_io import durable_sync, quarantine_torn_jsonl_tail
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    quarantine_torn_jsonl_tail(path)
+    data = (json.dumps(dict(row), default=str) + "\n").encode("utf-8")
+    with path.open("ab") as fh:
+        if fh.write(data) != len(data):
+            raise OSError(f"short write to {path.name}")
+        fh.flush()
+        durable_sync(fh.fileno())
+
+
 def emit(kind: str, text: str, **extra: Any) -> None:
     _append_jsonl(EVENTS_PATH, {"at": _now(), "kind": kind, "text": text, **extra})
 
@@ -504,8 +519,9 @@ def _consume_paper(
                         "execution_state": rec.get("execution_state"),
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                from product.counterfactual_learning import note_recording_failure
+                note_recording_failure("counterfactual freeze", str(rec.get("symbol") or ""), exc)
     blocked_broker = any(
         str(row.get("execution_state") or "") == "BLOCKED_BROKER_AUTH"
         for row in intents
@@ -538,7 +554,10 @@ def _publish_settlement_audit(events: list[dict[str, Any]]) -> None:
     from core.atomic_io import atomic_write_text
     from product.learning_observations import writer_lock
 
+    from core.atomic_io import quarantine_torn_jsonl_tail
+
     with writer_lock(LEARNING_PATH):
+        quarantine_torn_jsonl_tail(LEARNING_PATH)        # a memory append cut by a crash (audit F5)
         try:
             text = LEARNING_PATH.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -778,7 +797,7 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
         from product.learning_observations import writer_lock
 
         with writer_lock(LEARNING_PATH):
-            _append_jsonl(LEARNING_PATH, {
+            _append_jsonl_durable(LEARNING_PATH, {
                 "at": _now(), "observation": "memory_refresh", "as_of": as_of,
                 "observations": observations, "updates_policy": False,
                 "provenance": "REAL_FORWARD_MARKET",

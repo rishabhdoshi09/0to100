@@ -6,6 +6,8 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from product import candidate_lifecycle as CL
 from product import readiness as RDY
 from research.autonomy import jobs as JOBS
@@ -251,7 +253,10 @@ def test_outcome_job_succeeds_on_official_without_snapshot():
     assert "official" in result.summary
 
 
-def test_official_settlement_preserves_corrupt_counterfactual_ledger(tmp_path, monkeypatch):
+@pytest.mark.parametrize("corruption", [b'[]\n', b'\xff\n'])
+def test_official_settlement_preserves_corrupt_counterfactual_ledger(tmp_path, monkeypatch, corruption):
+    """RECONCILED (Claude, 24 Nov): a COMPLETE invalid line is corruption and is preserved
+    untouched; an unterminated torn last line is recovered (the next test)."""
     from product import autonomous_loop as loop
     from product import counterfactual_learning as cf
 
@@ -264,7 +269,7 @@ def test_official_settlement_preserves_corrupt_counterfactual_ledger(tmp_path, m
         entry=100.0, stop=90.0, target=120.0, as_of="2026-08-03",
         evidence={"decision_id": "d1"},
     )
-    original = path.read_bytes() + b'{"torn":'
+    original = path.read_bytes() + corruption
     path.write_bytes(original)
     from tests.evidence_fixtures import rulebook_outcome
     monkeypatch.setattr(
@@ -410,3 +415,32 @@ def test_candidate_refresh_cannot_overwrite_concurrent_settlement(tmp_path, monk
 
     assert CL.get(cid)["state"] == CL.CLOSED
     assert [t["to_state"] for t in CL.transitions_for(cid)] == [CL.WAIT, CL.CLOSED]
+
+
+
+def test_official_settlement_recovers_a_torn_last_line_and_keeps_its_bytes(tmp_path, monkeypatch):
+    from product import autonomous_loop as loop
+    from product import counterfactual_learning as cf
+
+    path = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(path))
+    monkeypatch.setattr("product.forward_soak.settle_pending_from_market", lambda: {})
+    monkeypatch.setattr(loop, "LEARNING_PATH", tmp_path / "learning.jsonl")
+    cf.freeze_decision(
+        symbol="HAL", reason_code="WAIT_FOR_ENTRY", decision="WAIT",
+        entry=100.0, stop=90.0, target=120.0, as_of="2026-08-03",
+        evidence={"decision_id": "d1"},
+    )
+    path.write_bytes(path.read_bytes() + b'{"torn":')
+    from tests.evidence_fixtures import rulebook_outcome
+    monkeypatch.setattr(
+        "core.outcome_resolver.counterfactual_outcome",
+        lambda *a, **k: rulebook_outcome(1.0, "WIN", 10.0),
+    )
+
+    result = loop.settle_official_outcomes("2026-08-03")
+
+    assert not result["failed"], result["failed"]
+    assert [r["symbol"] for r in result["settled"]] == ["HAL"]
+    sides = list(tmp_path.glob("counterfactuals.jsonl.torn-*"))
+    assert len(sides) == 1 and sides[0].read_bytes() == b'{"torn":'
