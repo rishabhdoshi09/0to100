@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from uuid import uuid4
 
 from product import candidate_lifecycle as CL
 from product import readiness as RDY
@@ -533,6 +534,46 @@ def _consume_paper(
 _SETTLE_FLUSH_EVERY = 500
 
 
+def _publish_settlement_audit(events: list[dict[str, Any]]) -> None:
+    from core.atomic_io import atomic_write_text
+    from product.learning_observations import writer_lock
+
+    with writer_lock(LEARNING_PATH):
+        try:
+            text = LEARNING_PATH.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+        published = {
+            json.loads(line).get("settlement_event_id")
+            for line in text.split("\n") if line.strip()
+        }
+        additions = [event for event in events if event["settlement_event_id"] not in published]
+        if additions:
+            separator = "\n" if text and not text.endswith("\n") else ""
+            atomic_write_text(
+                LEARNING_PATH,
+                text + separator + "".join(json.dumps(event, default=str) + "\n" for event in additions),
+                durable=True,
+            )
+
+
+def _replay_settlement_effects(path: Path, rows: list[dict[str, Any]]) -> None:
+    from core.atomic_io import atomic_write_text
+
+    pending = [row for row in rows if "pending_settlement_audit" in row]
+    if not pending:
+        return
+    events = [row["pending_settlement_audit"] for row in pending]
+    _publish_settlement_audit(events)
+    for event in events:
+        CL.close_counterfactual(event["symbol"], event["as_of"], event["classification"])
+    for row in pending:
+        del row["pending_settlement_audit"]
+    atomic_write_text(
+        path, "".join(json.dumps(row, default=str) + "\n" for row in rows), durable=True,
+    )
+
+
 def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     """Resolve frozen REJECTED/WAITED decisions from official completed bars. No Kite.
 
@@ -546,8 +587,9 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     stamped on it first would block that real result forever, because the
     ledger settles a row once.
     """
+    from core.atomic_io import atomic_write_text
     from core.outcome_resolver import counterfactual_outcome
-    from product.counterfactual_learning import classify_rulebook, ledger_path as cf_path
+    from product.counterfactual_learning import classify_rulebook, locked_ledger
     # forward-ledger rows: settled below by the one owner (forward_soak), not here
 
     as_of = session or session_date()
@@ -560,79 +602,71 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         good_waits = {"error": f"{type(exc).__name__}: {exc}"[:200]}
     try:
-        rows = []
-        path = cf_path()
-        if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
+        with locked_ledger() as (path, rows, _):
+            rewritten = []
+            for row in rows:
+                if row.get("classification") or row.get("outcome"):
+                    rewritten.append(row)
                     continue
+                if row.get("later_entry_pending"):
+                    # Its fill is still being verified: settling it on price now
+                    # would erase a GOOD_WAIT it may have earned (QT-07).
+                    pending.append({"symbol": row.get("symbol"), "as_of": row.get("as_of"),
+                                    "reason": "LATER_ENTRY_UNVERIFIED"})
+                    rewritten.append(row)
+                    continue
+                symbol = str(row.get("symbol") or "")
+                day = str(row.get("as_of") or as_of)[:10]
                 try:
-                    rows.append(json.loads(line))
-                except Exception:
+                    resolved = counterfactual_outcome(symbol, day, row.get("hypothetical_entry"),
+                                                      row.get("hypothetical_stop"), row.get("hypothetical_target"))
+                except Exception as exc:
+                    failed.append({"symbol": symbol, "error": str(exc)[:160]})
+                    rewritten.append(row)
                     continue
-        rewritten = []
-        for row in rows:
-            if row.get("classification") or row.get("outcome"):
+                if resolved is None:
+                    pending.append({"symbol": symbol, "as_of": day, "reason": "HORIZON_NOT_REACHED"})
+                    rewritten.append(row)
+                    continue
+                ret = resolved.get("return_pct")
+                classification = classify_rulebook(resolved)
+                row = dict(row)
+                row["outcome"] = {"forward_return_pct": ret, "exit": resolved.get("exit_price"), "not_pnl": True,
+                                  "source": "official_bhavcopy", "eval_spec": resolved.get("eval_spec"),
+                                  "rulebook_outcome": resolved.get("outcome"), "net_r": resolved.get("net_r")}
+                row["eval_spec"] = resolved.get("eval_spec")
+                row["counterfactual_R"] = resolved.get("net_r")
+                row["classification"] = classification
                 rewritten.append(row)
-                continue
-            if row.get("later_entry_pending"):
-                # Its fill is still being verified: settling it on price now
-                # would erase a GOOD_WAIT it may have earned (QT-07).
-                pending.append({"symbol": row.get("symbol"), "as_of": row.get("as_of"),
-                                "reason": "LATER_ENTRY_UNVERIFIED"})
-                rewritten.append(row)
-                continue
-            symbol = str(row.get("symbol") or "")
-            day = str(row.get("as_of") or as_of)[:10]
-            try:
-                resolved = counterfactual_outcome(symbol, day, row.get("hypothetical_entry"),
-                                                  row.get("hypothetical_stop"), row.get("hypothetical_target"))
-            except Exception as exc:
-                failed.append({"symbol": symbol, "error": str(exc)[:160]})
-                rewritten.append(row)
-                continue
-            if resolved is None:
-                pending.append({"symbol": symbol, "as_of": day, "reason": "HORIZON_NOT_REACHED"})
-                rewritten.append(row)
-                continue
-            ret = resolved.get("return_pct")
-            classification = classify_rulebook(resolved)
-            row = dict(row)
-            row["outcome"] = {"forward_return_pct": ret, "exit": resolved.get("exit_price"), "not_pnl": True,
-                              "source": "official_bhavcopy", "eval_spec": resolved.get("eval_spec"),
-                              "rulebook_outcome": resolved.get("outcome"), "net_r": resolved.get("net_r")}
-            row["eval_spec"] = resolved.get("eval_spec")
-            row["counterfactual_R"] = resolved.get("net_r")
-            row["classification"] = classification
-            rewritten.append(row)
-            settled.append({"symbol": symbol, "classification": classification, "return_pct": ret, "as_of": day,
-                            "eval_spec": resolved.get("eval_spec")})
-            from product.missed_winner import analyze_decision_quality
+                settled.append({"symbol": symbol, "classification": classification, "return_pct": ret, "as_of": day,
+                                "eval_spec": resolved.get("eval_spec")})
+                from product.missed_winner import analyze_decision_quality
 
-            quality = analyze_decision_quality(
-                row, classification=classification, forward_return_pct=ret,
-            )
-            row["decision_quality"] = quality
-            _append_jsonl(LEARNING_PATH, {
-                "at": _now(), "symbol": symbol, "as_of": day,
-                "classification": classification, "return_pct": ret,
-                "reason_code": row.get("reason_code"),
-                "decision_quality": quality,
-                "provenance": "REAL_FORWARD_MARKET",
-                "eval_spec": resolved.get("eval_spec"),
-                "updates_policy": False,
-                "observation": "counterfactual_settled",
-            })
-            cid = CL.candidate_id(symbol, day)
-            if CL.get(cid):
-                CL.upsert(
-                    symbol=symbol, session_date=day, state=CL.CLOSED,
-                    reason=classification, outcome_id=f"{cid}:outcome", trigger="outcome",
+                quality = analyze_decision_quality(
+                    row, classification=classification, forward_return_pct=ret,
                 )
-        if rewritten:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("".join(json.dumps(r, default=str) + "\n" for r in rewritten), encoding="utf-8")
+                row["decision_quality"] = quality
+                row["pending_settlement_audit"] = {
+                    "settlement_event_id": uuid4().hex,
+                    "at": _now(), "symbol": symbol, "as_of": day,
+                    "classification": classification, "return_pct": ret,
+                    "reason_code": row.get("reason_code"),
+                    "decision_quality": quality,
+                    "provenance": "REAL_FORWARD_MARKET",
+                    "eval_spec": resolved.get("eval_spec"),
+                    "updates_policy": False,
+                    "observation": "counterfactual_settled",
+                }
+            if settled:
+                atomic_write_text(
+                    path, "".join(json.dumps(r, default=str) + "\n" for r in rewritten), durable=True,
+                )
+            try:
+                _replay_settlement_effects(path, rewritten)
+            except Exception as exc:
+                failed.append({"stage": "counterfactual_effects", "error": str(exc)[:200]})
     except Exception as exc:
+        settled.clear()
         failed.append({"error": str(exc)[:200]})
 
     # Forward-ledger rows have ONE settlement owner (overnight review L-01):
@@ -741,11 +775,14 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
     }
     _write_json(MEMORY_PATH, memory)
     if observations:
-        _append_jsonl(LEARNING_PATH, {
-            "at": _now(), "observation": "memory_refresh", "as_of": as_of,
-            "observations": observations, "updates_policy": False,
-            "provenance": "REAL_FORWARD_MARKET",
-        })
+        from product.learning_observations import writer_lock
+
+        with writer_lock(LEARNING_PATH):
+            _append_jsonl(LEARNING_PATH, {
+                "at": _now(), "observation": "memory_refresh", "as_of": as_of,
+                "observations": observations, "updates_policy": False,
+                "provenance": "REAL_FORWARD_MARKET",
+            })
     return memory
 
 

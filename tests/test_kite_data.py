@@ -308,3 +308,36 @@ def test_no_manual_upload_needed_for_kite_refresh(tmp_path, monkeypatch):
 def test_manual_file_import_remains_available():
     from research.intelligence.data import from_bhav
     assert hasattr(from_bhav, "snapshot_from_bhav_dir")  # offline fallback still present
+
+
+@pytest.mark.parametrize("stale_tokens", [{111, 222, 333, 999}, {999}])
+def test_refresh_does_not_activate_stale_equity_or_benchmark(tmp_path, stale_tokens):
+    ds = _ds(tmp_path)
+    old = ds.daily_refresh(now=datetime(2024, 5, 31, 18, 30))
+    assert old.activated
+    historical = ds.client.historical
+
+    def behind(token, start, end, interval="day"):
+        rows = historical(token, start, end, interval)
+        return [row for row in rows if token not in stale_tokens or row["date"] < end]
+
+    ds.client.historical = behind
+    result = ds.daily_refresh(now=_NOW)
+
+    assert not result.activated
+    assert result.status == "COMMITTED_NOT_ACTIVATED"
+    assert "stale" in result.reason.lower()
+    assert ds.store.get_active_snapshot() == old.snapshot_id
+
+
+def test_kite_refresh_excludes_cached_bars_after_the_requested_cutoff(tmp_path):
+    ds = _ds(tmp_path)
+    assert ds.daily_refresh(now=_NOW).activated
+
+    report = ds.daily_refresh(now=datetime(2024, 5, 31, 18, 30))
+
+    assert report.activated
+    assert report.date_range[1] == "2024-05-31"
+    saved = ds.store.open_snapshot(report.snapshot_id)
+    assert saved.manifest["last_trading_date"] == "2024-05-31"
+    assert "2024-06-03" not in (ds.store.root / report.snapshot_id / "index_daily.csv").read_text()

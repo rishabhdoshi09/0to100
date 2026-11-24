@@ -83,7 +83,7 @@ def snapshot_from_bhav_dir(bhav_dir, store: SnapshotStore | None = None, *, inde
         report["result"] = "no valid equity rows — nothing committed"
         return None, report
     sid = store.commit_snapshot(rows, index_rows=index_rows,
-                                extra_manifest={"source": "bhav_import", **(extra_manifest or {})})
+                                extra_manifest={**(extra_manifest or {}), "source": "bhav_import"})
     report["snapshot_id"] = sid
     if activate:
         store.activate_snapshot(sid, actor="user", reason="bhav import")

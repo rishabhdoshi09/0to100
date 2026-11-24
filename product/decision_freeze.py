@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -185,37 +186,34 @@ def freeze(rec: Mapping[str, Any], *, path: Path | None = None) -> dict[str, Any
         "rewritten_after_outcome": False,
     }
 
-    con = _connect(path)
-    existing = con.execute(
-        "SELECT fingerprint, payload_json FROM freezes WHERE freeze_id=?",
-        (freeze_id,),
-    ).fetchone()
-    if existing:
+    lookup = "SELECT fingerprint, payload_json FROM freezes WHERE freeze_id=?"
+    with closing(_connect(path)) as con, con:
+        existing = con.execute(lookup, (freeze_id,)).fetchone()
+        if existing is None:
+            inserted = con.execute(
+                "INSERT INTO freezes (freeze_id, fingerprint, symbol, as_of, decision, frozen_at, payload_json) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(freeze_id) DO NOTHING",
+                (
+                    freeze_id,
+                    fp,
+                    material["symbol"],
+                    material["as_of"],
+                    material["decision"],
+                    payload["frozen_at"],
+                    json.dumps(payload, default=str),
+                ),
+            )
+            if inserted.rowcount == 1:
+                return payload
+            existing = con.execute(lookup, (freeze_id,)).fetchone()
+
         saved = json.loads(existing["payload_json"])
         saved_fp = str(existing["fingerprint"] or saved.get("fingerprint") or "")
-        con.close()
         if saved_fp != fp:
             raise DecisionIdentityCollision(
                 f"decision freeze collision for {freeze_id}: {saved_fp} != {fp}"
             )
         return saved
-
-    con.execute(
-        "INSERT INTO freezes (freeze_id, fingerprint, symbol, as_of, decision, frozen_at, payload_json) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (
-            freeze_id,
-            fp,
-            material["symbol"],
-            material["as_of"],
-            material["decision"],
-            payload["frozen_at"],
-            json.dumps(payload, default=str),
-        ),
-    )
-    con.commit()
-    con.close()
-    return payload
 
 
 def get_freeze(freeze_id: str, *, path: Path | None = None) -> dict[str, Any] | None:

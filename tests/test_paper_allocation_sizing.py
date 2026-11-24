@@ -165,8 +165,11 @@ def test_paper_risk_budget_refuses_unfunded_entry_after_large_realized_loss():
 
 
 def test_paper_book_restore_retains_realized_equity_sizing_contract():
-    book = PaperBook(capital=100_000)
-    book.realized_pnl = -50_000
+    book = PaperBook(capital=100_000, max_position_pct=1.0)
+    assert book.open_position("prior", "TCS", 100, 99, 120, "2026-11-04", 5)
+    trades = book.mark({"TCS": (50, 51, 49, 50)}, "2026-11-05")
+    assert len(trades) == 1 and trades[0].pnl == book.realized_pnl == -50_000
+    book.max_position_pct = 0.10
     restored = PaperBook()
     assert restored.restore(book.snapshot(), strict=True)
     pos = restored.open_position("strategy", "AAA", 100, 90, 120, "2026-11-06", 5)

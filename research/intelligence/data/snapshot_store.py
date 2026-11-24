@@ -21,6 +21,7 @@ from core.runtime_paths import logs_dir
 
 SCHEMA_VERSION = 1
 PARSER_VERSION = 1
+IDENTITY_VERSION = 2
 
 
 def _canonical_csv(rows, header) -> str:
@@ -47,18 +48,12 @@ class SnapshotStore:
         ix_header = ["name", "date", "open", "high", "low", "close"]
         eq_csv = _canonical_csv([tuple(r) for r in equity_rows], eq_header)
         ix_csv = _canonical_csv([tuple(r) for r in (index_rows or [])], ix_header)
-        blob = (eq_csv + "\x1e" + ix_csv + f"\x1e{SCHEMA_VERSION}.{PARSER_VERSION}").encode()
-        sid = hashlib.sha256(blob).hexdigest()[:16]
-        sdir = self.root / sid
-        if sdir.exists():
-            return sid                                    # already committed — immutable, idempotent
-
         eq_rows = list(eq_csv_to_rows(eq_csv))
         ix_rows = list(eq_csv_to_rows(ix_csv))
         dates = sorted({r[1] for r in eq_rows})
         symbols = sorted({r[0] for r in eq_rows})
         manifest = {
-            "snapshot_id": sid, "parent_snapshot_id": parent_id,
+            "parent_snapshot_id": parent_id, "identity_version": IDENTITY_VERSION,
             "schema_version": SCHEMA_VERSION, "parser_version": PARSER_VERSION,
             "equity_sha256": hashlib.sha256(eq_csv.encode()).hexdigest(),
             "index_sha256": hashlib.sha256(ix_csv.encode()).hexdigest(),
@@ -69,15 +64,23 @@ class SnapshotStore:
             "index_bar_count": len(ix_rows),
             "has_benchmark": len(ix_rows) > 0,
         }
-        manifest.update(extra_manifest or {})
+        extra = dict(extra_manifest or {})
+        if extra.keys() & (manifest.keys() | {"snapshot_id", "manifest_checksum"}):
+            raise ValueError("extra manifest fields cannot override snapshot metadata")
+        manifest.update(extra)
+        sid = _snapshot_identity(manifest)
+        sdir = self.root / sid
+        if sdir.exists():
+            return sid
+        manifest["snapshot_id"] = sid
         manifest["manifest_checksum"] = _manifest_checksum(manifest)
 
         # write atomically into a temp dir, then rename — no partial snapshot is ever visible
         tmp = Path(tempfile.mkdtemp(prefix=f".stage_{sid}_", dir=self.root))
         try:
-            (tmp / "bars_equity.csv").write_text(eq_csv, encoding="utf-8")
+            (tmp / "bars_equity.csv").write_text(eq_csv, encoding="utf-8", newline="\n")
             if ix_csv.strip():
-                (tmp / "index_daily.csv").write_text(ix_csv, encoding="utf-8")
+                (tmp / "index_daily.csv").write_text(ix_csv, encoding="utf-8", newline="\n")
             (tmp / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             os.replace(tmp, sdir)                         # atomic publish
         finally:
@@ -98,14 +101,22 @@ class SnapshotStore:
             m = json.loads(mpath.read_text())
         except Exception as e:
             return False, [f"manifest unreadable: {e}"]
+        if not isinstance(m, dict):
+            return False, ["manifest must be an object"]
         chk = m.get("manifest_checksum")
         if chk != _manifest_checksum({k: v for k, v in m.items() if k != "manifest_checksum"}):
             fails.append("manifest checksum mismatch")
+        legacy_hash = hashlib.sha256() if "identity_version" not in m else None
         eqp = sdir / "bars_equity.csv"
         if not eqp.exists():
             fails.append("equity data file missing")
-        elif hashlib.sha256(eqp.read_text().encode()).hexdigest() != m.get("equity_sha256"):
-            fails.append("equity data hash mismatch")
+        else:
+            equity = eqp.read_text(encoding="utf-8").encode("utf-8")
+            if hashlib.sha256(equity).hexdigest() != m.get("equity_sha256"):
+                fails.append("equity data hash mismatch")
+            if legacy_hash is not None:
+                legacy_hash.update(equity)
+            del equity
         # The snapshot id and manifest cover both equity and index bars.
         # Treat the index file as an equally critical input: corrupted or
         # missing NIFTY data must never pass as a verified market snapshot.
@@ -114,10 +125,26 @@ class SnapshotStore:
         if expected_index_hash:
             if not index_path.exists():
                 fails.append("index data file missing")
-            elif hashlib.sha256(index_path.read_bytes()).hexdigest() != expected_index_hash:
-                fails.append("index data hash mismatch")
+            else:
+                index = index_path.read_text(encoding="utf-8").encode("utf-8")
+                if hashlib.sha256(index).hexdigest() != expected_index_hash:
+                    fails.append("index data hash mismatch")
+                if legacy_hash is not None:
+                    legacy_hash.update(b"\x1e")
+                    legacy_hash.update(index)
         elif m.get("has_benchmark") or m.get("index_bar_count"):
             fails.append("index data checksum missing")
+        if legacy_hash is not None:
+            if not expected_index_hash:
+                legacy_hash.update(b"\x1ename,date,open,high,low,close\n")
+            legacy_hash.update(f"\x1e{m.get('schema_version')}.{m.get('parser_version')}".encode())
+            expected_id = legacy_hash.hexdigest()[:16]
+        elif m.get("identity_version") == IDENTITY_VERSION:
+            expected_id = _snapshot_identity(m)
+        else:
+            expected_id = None
+        if m.get("snapshot_id") != snapshot_id or expected_id != snapshot_id:
+            fails.append("snapshot identity mismatch")
         if m.get("schema_version") != SCHEMA_VERSION:
             fails.append("unsupported schema version")
         return (not fails), fails
@@ -172,3 +199,9 @@ def eq_csv_to_rows(csv_text: str):
 
 def _manifest_checksum(m: dict) -> str:
     return hashlib.sha256(json.dumps(m, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _snapshot_identity(manifest: dict) -> str:
+    metadata = {key: value for key, value in manifest.items()
+                if key not in {"snapshot_id", "manifest_checksum", "parent_snapshot_id"}}
+    return _manifest_checksum(metadata)[:16]

@@ -249,3 +249,164 @@ def test_outcome_job_succeeds_on_official_without_snapshot():
     result = JOBS.run_outcome_resolution(JOBS._Ctx(Deps()))
     assert result.status == JS.SUCCEEDED
     assert "official" in result.summary
+
+
+def test_official_settlement_preserves_corrupt_counterfactual_ledger(tmp_path, monkeypatch):
+    from product import autonomous_loop as loop
+    from product import counterfactual_learning as cf
+
+    path = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(path))
+    monkeypatch.setattr("product.forward_soak.settle_pending_from_market", lambda: {})
+    monkeypatch.setattr(loop, "LEARNING_PATH", tmp_path / "learning.jsonl")
+    cf.freeze_decision(
+        symbol="HAL", reason_code="WAIT_FOR_ENTRY", decision="WAIT",
+        entry=100.0, stop=90.0, target=120.0, as_of="2026-08-03",
+        evidence={"decision_id": "d1"},
+    )
+    original = path.read_bytes() + b'{"torn":'
+    path.write_bytes(original)
+    from tests.evidence_fixtures import rulebook_outcome
+    monkeypatch.setattr(
+        "core.outcome_resolver.counterfactual_outcome",
+        lambda *a, **k: rulebook_outcome(1.0, "WIN", 10.0),
+    )
+
+    result = loop.settle_official_outcomes("2026-08-03")
+
+    assert not result["settled"]
+    assert "counterfactual ledger" in result["failed"][0]["error"]
+    assert path.read_bytes() == original
+    assert not loop.LEARNING_PATH.exists()
+
+
+def test_official_settlement_preserves_a_concurrent_counterfactual_freeze(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from product import autonomous_loop as loop
+    from product import counterfactual_learning as cf
+    from tests.evidence_fixtures import rulebook_outcome
+
+    path = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(path))
+    monkeypatch.setattr("product.forward_soak.settle_pending_from_market", lambda: {})
+    monkeypatch.setattr(loop, "LEARNING_PATH", tmp_path / "learning.jsonl")
+    resolving = Event()
+    appended = Event()
+
+    def freeze(symbol):
+        return cf.freeze_decision(
+            symbol=symbol, reason_code="WAIT_FOR_ENTRY", decision="WAIT",
+            entry=100.0, stop=90.0, target=120.0, as_of="2026-08-03",
+            evidence={"decision_id": symbol},
+        )
+
+    def resolve(*args):
+        resolving.set()
+        # An uncoordinated writer completes its append after the settlement
+        # snapshot was read, then the rewrite silently loses that append.
+        appended.wait(timeout=1)
+        return rulebook_outcome(1.0, "WIN", 10.0)
+
+    def freeze_second():
+        row = freeze("TCS")
+        appended.set()
+        return row
+
+    freeze("HAL")
+    monkeypatch.setattr("core.outcome_resolver.counterfactual_outcome", resolve)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        settlement = pool.submit(loop.settle_official_outcomes, "2026-08-03")
+        assert resolving.wait(timeout=10)
+        second = pool.submit(freeze_second)
+        assert settlement.result(timeout=10)["n_settled"] == 1
+        assert second.result(timeout=10)["symbol"] == "TCS"
+
+    rows = {row["symbol"]: row for row in map(json.loads, path.read_text().splitlines())}
+    assert rows["HAL"]["classification"] == "MISSED_WINNER"
+    assert rows["TCS"]["classification"] is None
+
+
+def test_official_settlement_does_not_publish_effects_if_ledger_commit_fails(tmp_path, monkeypatch):
+    from core import atomic_io
+    from product import autonomous_loop as loop
+    from product import counterfactual_learning as cf
+    from tests.evidence_fixtures import rulebook_outcome
+
+    path = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(path))
+    monkeypatch.setattr(loop, "LEARNING_PATH", tmp_path / "learning.jsonl")
+    monkeypatch.setattr(CL, "DB_PATH", tmp_path / "candidates.db")
+    monkeypatch.setattr("product.forward_soak.settle_pending_from_market", lambda: {})
+    monkeypatch.setattr("core.outcome_resolver.counterfactual_outcome",
+                        lambda *a: rulebook_outcome(1.0, "WIN", 10.0))
+    cf.freeze_decision(symbol="HAL", reason_code="WAIT_FOR_ENTRY", decision="WAIT",
+                       entry=100, stop=90, target=120, as_of="2026-08-03")
+    candidate = CL.upsert(symbol="HAL", session_date="2026-08-03", state=CL.WAIT)
+    original = path.read_bytes()
+    write = atomic_io.atomic_write_text
+
+    def fail_ledger(target, *args, **kwargs):
+        if target == path:
+            raise OSError("ledger commit interrupted")
+        return write(target, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(atomic_io, "atomic_write_text", fail_ledger)
+        result = loop.settle_official_outcomes("2026-08-03")
+
+    assert result["n_settled"] == 0
+    assert result["failed"]
+    assert path.read_bytes() == original
+    assert CL.get(candidate["candidate_id"])["state"] == CL.WAIT
+    assert not loop.LEARNING_PATH.exists()
+    assert loop.settle_official_outcomes("2026-08-03")["n_settled"] == 1
+    assert CL.get(candidate["candidate_id"])["state"] == CL.CLOSED
+
+
+def test_candidate_refresh_cannot_overwrite_concurrent_settlement(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    monkeypatch.setattr(CL, "DB_PATH", tmp_path / "candidates.db")
+    cid = CL.upsert(symbol="HAL", session_date="2026-08-03", state=CL.WAIT)["candidate_id"]
+    connect = CL._connect
+    refresh_read = Event()
+    settlement_done = Event()
+
+    class InterleavedConnection:
+        def __init__(self, con):
+            self.con = con
+
+        def __getattr__(self, name):
+            return getattr(self.con, name)
+
+        def __enter__(self):
+            return self.con.__enter__()
+
+        def __exit__(self, *exc):
+            return self.con.__exit__(*exc)
+
+        def execute(self, sql, *args):
+            result = self.con.execute(sql, *args)
+            if sql == "SELECT * FROM candidates WHERE candidate_id=?" and not refresh_read.is_set():
+                refresh_read.set()
+                settlement_done.wait(timeout=1)
+            return result
+
+    monkeypatch.setattr(CL, "_connect", lambda path=None: InterleavedConnection(connect(path)))
+
+    def settle():
+        CL.close_counterfactual("HAL", "2026-08-03", "MISSED_WINNER")
+        settlement_done.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        refresh = pool.submit(CL.upsert, symbol="HAL", session_date="2026-08-03", state=CL.WAIT)
+        assert refresh_read.wait(timeout=10)
+        resolution = pool.submit(settle)
+        refresh.result(timeout=10)
+        resolution.result(timeout=10)
+
+    assert CL.get(cid)["state"] == CL.CLOSED
+    assert [t["to_state"] for t in CL.transitions_for(cid)] == [CL.WAIT, CL.CLOSED]

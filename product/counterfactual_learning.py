@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,20 +120,115 @@ def ledger_path(path: str | Path | None = None) -> Path:
     return DEFAULT_PATH
 
 
-def _read_ledger(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    out: list[dict[str, Any]] = []
+def _read_ledger(path: Path) -> tuple[list[dict[str, Any]], bytes]:
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
+    except FileNotFoundError:
+        return [], b""
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"invalid UTF-8 in counterfactual ledger {path}") from exc
+
+    rows = []
+    for number, line in enumerate(text.split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
             row = json.loads(line)
-            if isinstance(row, dict):
-                out.append(row)
-    except Exception:
-        return []
-    return out
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON in counterfactual ledger {path}, line {number}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"expected an object in counterfactual ledger {path}, line {number}")
+        rows.append(row)
+    return rows, raw
+
+
+def _append_intent_path(path: Path) -> Path:
+    return path.with_name(path.name + ".append-intent.json")
+
+
+def _sync_append_directory(path: Path) -> None:
+    from core.atomic_io import durable_sync
+
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        durable_sync(fd)
+    finally:
+        os.close(fd)
+
+
+def _finish_append(path: Path, missing: bytes) -> None:
+    from core.atomic_io import durable_sync
+
+    with path.open("ab") as handle:
+        if handle.write(missing) != len(missing):
+            raise OSError("short counterfactual ledger write")
+        handle.flush()
+        durable_sync(handle.fileno())
+    _append_intent_path(path).unlink()
+    _sync_append_directory(path)
+
+
+def _recover_append(path: Path) -> None:
+    intent_path = _append_intent_path(path)
+    try:
+        raw = intent_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+
+    try:
+        intent = json.loads(raw)
+        offset = intent["offset"]
+        prefix_sha256 = intent["prefix_sha256"]
+        suffix = intent["suffix"].encode("ascii")
+        if type(offset) is not int or offset < 0 or not suffix.endswith(b"\n"):
+            raise ValueError("invalid append dimensions")
+        if sha256(suffix).hexdigest() != intent["suffix_sha256"]:
+            raise ValueError("append payload checksum mismatch")
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise ValueError(f"invalid counterfactual ledger append intent {intent_path}") from exc
+
+    try:
+        current = path.read_bytes()
+    except FileNotFoundError:
+        current = b""
+    if (len(current) < offset or sha256(current[:offset]).hexdigest() != prefix_sha256
+            or not suffix.startswith(current[offset:])):
+        raise ValueError(f"counterfactual ledger differs from append intent {intent_path}")
+
+    _sync_append_directory(intent_path)
+    _finish_append(path, suffix[len(current) - offset:])
+
+
+def _append_frozen_row(path: Path, prefix: bytes, row: Mapping[str, Any]) -> None:
+    from core.atomic_io import atomic_write_text
+
+    separator = "\n" if prefix and not prefix.endswith(b"\n") else ""
+    text = separator + json.dumps(row, default=str) + "\n"
+    suffix = text.encode("ascii")
+    intent_path = _append_intent_path(path)
+    atomic_write_text(intent_path, json.dumps({
+        "offset": len(prefix),
+        "prefix_sha256": sha256(prefix).hexdigest(),
+        "suffix": text,
+        "suffix_sha256": sha256(suffix).hexdigest(),
+    }), durable=True)
+    # The shared helper treats directory sync as best-effort. The intent must
+    # survive a power cut before we touch the append-only ledger.
+    _sync_append_directory(intent_path)
+    _finish_append(path, suffix)
+
+
+@contextmanager
+def locked_ledger(path: str | Path | None = None) -> Iterator[tuple[Path, list[dict[str, Any]], bytes]]:
+    """Read a validated snapshot under the lock shared by appenders and settlers."""
+    from product.learning_observations import writer_lock
+
+    target = ledger_path(path)
+    with writer_lock(target):
+        _recover_append(target)
+        rows, prefix = _read_ledger(target)
+        yield target, rows, prefix
 
 
 def _counterfactual_freeze_path(path: str | Path | None) -> Path:
@@ -222,14 +319,13 @@ def freeze_decision(
         "classification": None,
         "not_pnl": True,
     }
-    target_path = ledger_path(path)
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    for existing in _read_ledger(target_path):
-        if counterfactual_id and str(existing.get("counterfactual_id") or "") == counterfactual_id:
-            return existing
-    with target_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, default=str) + "\n")
+    with locked_ledger(path) as (target_path, existing_rows, prefix):
+        for existing in existing_rows:
+            if str(existing.get("counterfactual_id") or "") == counterfactual_id:
+                return existing
+        _append_frozen_row(target_path, prefix, row)
     return row
+
 
 def classify_forward(
     *,
