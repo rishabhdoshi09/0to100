@@ -39,6 +39,45 @@ def _existing_owner(root) -> tuple[str, str]:
     return pid, state
 
 
+class PipeWake:
+    """A LOCK-FREE wake for the loop's sleep, safe to set from a signal handler.
+
+    A signal handler runs in the main thread between bytecodes, possibly while that thread
+    is inside threading.Event's own critical section (entering or leaving every wait):
+    Event.set() then blocks forever on the Event's non-reentrant lock (reproduced: a
+    SIGTERM during ``with wake._cond`` hung until killed; GPT review of 24 Nov). ``set``
+    writes one byte to a non-blocking pipe (no Python lock), ``wait`` selects on it.
+    """
+
+    def __init__(self) -> None:
+        import os
+
+        self._r, self._w = os.pipe()
+        os.set_blocking(self._r, False)
+        os.set_blocking(self._w, False)
+
+    def set(self) -> None:
+        import os
+
+        try:
+            os.write(self._w, b"x")
+        except BlockingIOError:
+            pass                                  # a wake is already pending
+
+    def wait(self, timeout: float | None = None) -> bool:
+        import os
+        import select
+
+        ready, _, _ = select.select([self._r], [], [], None if timeout is None else max(0.0, float(timeout)))
+        if not ready:
+            return False
+        try:
+            os.read(self._r, 4096)
+        except BlockingIOError:
+            pass
+        return True
+
+
 def install_sigterm_as_stop(supervisor, wake) -> bool:
     """Make SIGTERM a COOPERATIVE stop: ask the loop to finish, never interrupt a job.
 
@@ -48,8 +87,9 @@ def install_sigterm_as_stop(supervisor, wake) -> bool:
     the F1 repair tool and byte copies must refuse (cycle-8 review, part 7). Raising an
     exception at an arbitrary point instead was rejected (GPT C8.7-01/02): it can split a
     job-store write from its commit on a connection the heartbeat shares, and broad handlers
-    swallow it. This handler only calls ``supervisor.stop()`` and sets ``wake`` (the loop
-    sleeps on it), so the loop exits between ticks, ``sup.shutdown()`` runs and the
+    swallow it. This handler only calls ``supervisor.stop()`` (a plain attribute store) and
+    sets ``wake``, a PipeWake the loop sleeps on (lock-free: an Event deadlocks when the
+    signal lands inside its own critical section), so the loop exits between ticks, ``sup.shutdown()`` runs and the
     interpreter exits normally. A job already running finishes, or the host's SIGKILL
     arrives after its grace period, exactly as before. Only from the main thread, never
     over an existing handler. Returns whether it was installed.
@@ -149,7 +189,6 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     and the dedicated React terminal are optional observers; neither owns the scheduler.
     """
     import os
-    import threading
     import traceback
 
     install_runtime_handlers()
@@ -164,8 +203,8 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
         print(f"autonomy: failed to initialise: {type(exc).__name__}: {exc}", flush=True)
         traceback.print_exc()
         return 2
-    wake = threading.Event()
-    install_sigterm_as_stop(sup, wake)              # before start(): a stop then still ends cleanly
+    wake = PipeWake()                               # lock-free: set from the signal handler
+    cooperative = install_sigterm_as_stop(sup, wake)  # before start(): a stop then still ends cleanly
 
     if not sup.start():
         pid, state = _existing_owner(resolved_root)
@@ -212,5 +251,13 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
         try:
             sup.shutdown()
         finally:
+            if cooperative:
+                # The stop is done; a LATER SIGTERM (repeated, or arriving during interpreter
+                # finalization after Python restored the default handlers) must not turn this
+                # clean exit into a kill. atexit (the keepers' checkpoints) still runs; the
+                # host's SIGKILL after its grace period still works.
+                import signal
+
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
             print("autonomy: shutdown complete; scheduler lock released.", flush=True)
     return 0
