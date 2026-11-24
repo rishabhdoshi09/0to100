@@ -125,26 +125,39 @@ sys.exit(rc)
 """
 
 
+class _Child:
+    """A child process whose stdout is read through ONE file object. Popen.communicate()
+    reads the raw descriptors and silently drops lines already buffered by line reads."""
+
+    def __init__(self, proc):
+        self.proc, self.seen = proc, []
+
+    def until(self, wanted: str) -> None:
+        for line in self.proc.stdout:
+            self.seen.append(line.strip())
+            if line.strip() == wanted:
+                return
+        raise AssertionError(f"the child ended before {wanted!r}: {self.seen}")
+
+    def finish(self, timeout: float = 15.0) -> tuple[str, str]:
+        try:
+            self.proc.wait(timeout=timeout)
+        finally:
+            if self.proc.poll() is None:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        rest = self.proc.stdout.read()
+        return "\n".join(self.seen) + "\n" + rest, self.proc.stderr.read()
+
+
 def _start(tmp_path, mode):
     root = tmp_path / "auto"
     proc = subprocess.Popen([sys.executable, "-c", _ENTRY, str(REPO), str(root), mode], cwd=REPO,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_env(tmp_path))
-    job_id = None
-    for line in proc.stdout:
-        line = line.strip()
-        if line.startswith("JOB "):
-            job_id = line.split()[1]
-        if line == "READY":
-            break
-    return proc, root, job_id
-
-
-def _finish(proc, timeout=15.0):
-    try:
-        return proc.communicate(timeout=timeout)
-    finally:
-        if proc.poll() is None:
-            proc.kill()
+    child = _Child(proc)
+    child.until("READY")
+    job_id = next((line.split()[1] for line in child.seen if line.startswith("JOB ")), None)
+    return child, root, job_id
 
 
 def _job_status(root: Path, job_id: str) -> str:
@@ -158,23 +171,21 @@ def _job_status(root: Path, job_id: str) -> str:
 
 
 def test_a_sigterm_between_update_and_commit_never_splits_the_write(tmp_path):
-    proc, root, job_id = _start(tmp_path, "mid-commit")
-    out, err = _finish(proc)                 # the signal already fired inside the commit
-    assert proc.returncode == 0 and "RC 0" in out, err[-800:]
+    child, root, job_id = _start(tmp_path, "mid-commit")
+    out, err = child.finish()                # the signal already fired inside the commit
+    assert child.proc.returncode == 0 and "RC 0" in out, err[-800:]
     assert job_id and _job_status(root, job_id) == "SUCCEEDED"
 
 
 def test_repeated_sigterms_still_end_in_one_clean_stop(tmp_path):
-    proc, root, job_id = _start(tmp_path, "late")
-    proc.send_signal(signal.SIGTERM)
-    proc.send_signal(signal.SIGTERM)                          # repeated while stopping
-    for line in proc.stdout:                                  # until the clean stop is done
-        if line.strip() == "RC 0":
-            break
-    proc.send_signal(signal.SIGTERM)                          # and AFTER it, during the exit
-    proc.send_signal(signal.SIGTERM)
-    out, err = _finish(proc)
-    assert proc.returncode == 0, (proc.returncode, err[-800:])   # not turned into a kill (-15)
+    child, root, job_id = _start(tmp_path, "late")
+    child.proc.send_signal(signal.SIGTERM)
+    child.proc.send_signal(signal.SIGTERM)                    # repeated while stopping
+    child.until("RC 0")                                       # the clean stop is done
+    child.proc.send_signal(signal.SIGTERM)                    # and AFTER it, during the exit
+    child.proc.send_signal(signal.SIGTERM)
+    out, err = child.finish()
+    assert child.proc.returncode == 0, (child.proc.returncode, err[-800:])   # not a kill (-15)
     # The mechanism itself, deterministically: once the stop is done, SIGTERM is ignored, so a
     # signal during interpreter finalization (after Python restores the default handlers, a
     # window no test can hit on demand) cannot kill a clean exit.
@@ -191,9 +202,9 @@ def test_the_entry_point_wakes_its_loop_with_the_lock_free_pipe():
 def test_a_forced_kill_after_the_grace_period_leaks_no_scheduler_lock(tmp_path):
     from research.autonomy.supervisor import Supervisor
 
-    proc, root, job_id = _start(tmp_path, "plain")
-    proc.kill()                              # what the host does after STOP_GRACE_S
-    proc.wait(timeout=15)
+    child, root, job_id = _start(tmp_path, "plain")
+    child.proc.kill()                        # what the host does after STOP_GRACE_S
+    child.proc.wait(timeout=15)
     again = Supervisor(root)
     try:
         assert again.start()
