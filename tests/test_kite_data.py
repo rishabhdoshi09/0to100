@@ -341,3 +341,45 @@ def test_kite_refresh_excludes_cached_bars_after_the_requested_cutoff(tmp_path):
     saved = ds.store.open_snapshot(report.snapshot_id)
     assert saved.manifest["last_trading_date"] == "2024-05-31"
     assert "2024-06-03" not in (ds.store.root / report.snapshot_id / "index_daily.csv").read_text()
+
+
+
+# ── lifecycle audit F7 (24 Nov): freshness is per symbol, not the newest bar anywhere ──
+
+def test_a_refresh_where_most_symbols_stopped_early_is_never_activated(tmp_path):
+    ds = _ds(tmp_path)
+    old = ds.daily_refresh(now=datetime(2024, 5, 31, 18, 30))
+    assert old.activated
+    historical = ds.client.historical
+
+    def behind(token, start, end, interval="day"):
+        rows = historical(token, start, end, interval)
+        return [row for row in rows if token not in {222, 333} or row["date"] < end]    # FLAT, WEAK stale
+
+    ds.client.historical = behind
+    result = ds.daily_refresh(now=_NOW)
+    assert not result.activated and result.status == "COMMITTED_NOT_ACTIVATED"
+    assert result.missing_session_rate == pytest.approx(2 / 3, abs=1e-6)
+    assert "missing-session rate" in result.reason
+    assert ds.store.get_active_snapshot() == old.snapshot_id                       # the previous one stands
+    saved = ds.store.open_snapshot(result.snapshot_id)
+    assert saved.manifest["missing_session_rate"] == pytest.approx(2 / 3, abs=1e-6)
+
+
+def test_a_complete_refresh_records_a_zero_missing_rate(tmp_path):
+    ds = _ds(tmp_path)
+    result = ds.daily_refresh(now=_NOW)
+    assert result.activated and result.missing_session_rate == 0.0
+    assert ds.store.open_snapshot(result.snapshot_id).manifest["missing_session_rate"] == 0.0
+
+
+def test_a_caller_cannot_override_the_measured_rate(tmp_path):
+    ds = _ds(tmp_path)
+    old = ds.daily_refresh(now=datetime(2024, 5, 31, 18, 30))
+    historical = ds.client.historical
+    ds.client.historical = lambda token, start, end, interval="day": [
+        row for row in historical(token, start, end, interval) if token not in {222, 333} or row["date"] < end]
+    result = ds.daily_refresh(now=_NOW, extra_manifest={"missing_session_rate": 0.0})
+    assert not result.activated
+    assert ds.store.open_snapshot(result.snapshot_id).manifest["missing_session_rate"] > 0.05
+    assert ds.store.get_active_snapshot() == old.snapshot_id

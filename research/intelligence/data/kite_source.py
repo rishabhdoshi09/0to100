@@ -123,6 +123,7 @@ class RefreshReport:
     token_changes: int = 0
     symbol_changes: int = 0
     tier: str = ""
+    missing_session_rate: float | None = None   # symbols without the required session, measured
     date_range: tuple | None = None
     incidents: list = field(default_factory=list)
     reason: str = ""
@@ -399,12 +400,21 @@ class KiteDataSource:
             extra={"candles_fetched": rep.candles_fetched, "fetch_failures": fetch_failures},
         )
         prev_active = self.store.get_active_snapshot()
+        # The share of symbols WITHOUT the required completed session, measured, never assumed.
+        # It was written as a constant 0.0, so a refresh where most symbols stopped a session
+        # early still activated on the newest bar anywhere (lifecycle audit F7, 24 Nov).
+        # data_state.classify_tier refuses forward eligibility above 5%.
+        all_symbols = {row[0] for row in equity_rows}
+        current_symbols = {row[0] for row in equity_rows if row[1] == want_to}
+        missing_session_rate = round(1.0 - len(current_symbols) / len(all_symbols), 6)
+        rep.missing_session_rate = missing_session_rate
         sid = self.store.commit_snapshot(
             equity_rows, index_rows=index_rows,
             extra_manifest={"has_universe_history": True,
                             "adjustment_consistent": True, "corporate_action_coverage": 1.0,
-                            "missing_session_rate": 0.0, "validation_errors": 0,
-                            **(extra_manifest or {}), "source": "kite"})
+                            "validation_errors": 0,
+                            **(extra_manifest or {}), "source": "kite",
+                            "missing_session_rate": missing_session_rate})
         rep.snapshot_id = sid
         self._write_runtime_progress(
             "snapshot_verify", current=total_symbols, total=total_symbols,
