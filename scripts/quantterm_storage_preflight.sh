@@ -46,6 +46,50 @@ LINK_TARGET="$(readlink "$CANONICAL_RUNTIME")"
 [[ "$LINK_TARGET" == "$EXPECTED_RUNTIME" ]] || fail \
   "runtime symlink target mismatch: expected '$EXPECTED_RUNTIME', got '$LINK_TARGET'"
 
+# OPT-IN, OFF BY DEFAULT (QT_STORAGE_PREFLIGHT_STALE_DETACH=1, the owner's decision): clear a
+# STALE attachment of the CONFIGURED image. After a sleep the USB disk re-enumerates and the
+# image's helper is left holding revoked descriptors: the image shows as attached, its volume can
+# never mount, and re-attaching fails forever (19, 21, 22 and 23 Nov). Only that exact image, only
+# when none of its devices is mounted: first a plain mount of its own volume; only if that fails,
+# a plain detach of its device (NEVER -force), then the normal attach below. Every command is
+# bounded so a dead device cannot hang the gate.
+bounded() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+if [[ "${QT_STORAGE_PREFLIGHT_STALE_DETACH:-0}" == "1" && "$ATTACH_IF_NEEDED" == "1" ]] \
+   && ! diskutil info "$STORAGE_MOUNT" >/dev/null 2>&1; then
+  STALE="$(bounded 60 hdiutil info -plist 2>/dev/null | "${QT_STORAGE_PREFLIGHT_PYTHON:-python3}" -c '
+import os, plistlib, sys
+expected = os.path.realpath(sys.argv[1])
+try:
+    images = plistlib.loads(sys.stdin.buffer.read()).get("images") or []
+except Exception:
+    sys.exit(0)
+mine = [im for im in images if os.path.realpath(str(im.get("image-path") or "")) == expected]
+if len(mine) != 1:
+    sys.exit(0)                      # none, or ambiguous: never act
+ents = mine[0].get("system-entities") or []
+if any(e.get("mount-point") for e in ents):
+    sys.exit(0)                      # something of it is mounted: not stale, never detach
+devs = [str(e.get("dev-entry") or "") for e in ents]
+top = sorted((d for d in devs if d.startswith("/dev/disk") and "s" not in d[len("/dev/disk"):]), key=len)
+vol = [str(e.get("dev-entry")) for e in ents if e.get("content-hint") == "41504653-0000-11AA-AA11-00306543ECAC"]
+if top:
+    print(top[0], vol[0] if len(vol) == 1 else "")
+' "$SPARSEBUNDLE")" || STALE=""
+  if [[ -n "$STALE" ]]; then
+    read -r STALE_DEV STALE_VOL <<<"$STALE"
+    info "configured image is attached but not mounted ($STALE_DEV): trying to mount its own volume"
+    if [[ -n "${STALE_VOL:-}" ]] && bounded 60 diskutil mount "$STALE_VOL" >/dev/null 2>&1 \
+       && diskutil info "$STORAGE_MOUNT" >/dev/null 2>&1; then
+      info "mounted the configured image's volume $STALE_VOL"
+    else
+      info "its volume cannot be mounted: detaching the stale attachment $STALE_DEV (never -force)"
+      DETACH_OUTPUT="$(bounded 60 hdiutil detach "$STALE_DEV" 2>&1)" \
+        || fail "the stale attachment $STALE_DEV could not be detached: $(printf '%s\n' "$DETACH_OUTPUT" | tail -n 1)"
+      sleep 2
+    fi
+  fi
+fi
+
 if ! diskutil info "$STORAGE_MOUNT" >/dev/null 2>&1; then
   if [[ "$ATTACH_IF_NEEDED" != "1" ]]; then
     fail "runtime volume is not mounted at $STORAGE_MOUNT"

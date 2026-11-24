@@ -161,6 +161,13 @@ At about 0.5 s each, that is roughly 4 minutes on a light day and 35 minutes on 
 | Production today: connection per write, no barrier | 3.4 ms | 10 ms | 32 ms | 342 ms | 179 | ≈17 s |
 | **Candidate `2787a690`: per write + barrier** | 280 ms | 922 ms | 964 ms | 1.04 s | 2.6 | ≈19.5 min |
 | Candidate, 60 s sustained | 244 ms | 954 ms | **109.7 s** | **109.7 s** | **0.1** | (one stall) |
+
+**Correction (24 Nov 08:20, host diagnosis).** The 109.7 s stall above is **not** an fsync cost.
+
+- **What happened instead:** the kernel log shows the Expansion HDD reset on the USB bus twice during this run, at 01:35:09 and 01:35:48. The device was terminated and re-enumerated within milliseconds each time, and the volume rode through.
+- **Which reports this affects:** the #333 report of `bf787f41` cites it as a property of the per-call barrier.
+- **What still holds:** the decision rests on the p50/p99 columns alone (280 ms → 85 ms).
+- **What it shows:** this disk resets under heavy flush load. No further benchmarks run on it.
 | Per write + **one idle keeper** + barrier, `synchronous=NORMAL` | **0.95 ms** | 2.2 ms | 5.1 ms | 227 ms | 433 | ≈7 s |
 | Per write + keeper + barrier, `synchronous=FULL` | 85 ms | 551 ms | 760 ms | 858 ms | 7.8 | ≈6.4 min |
 | Persistent connection + barrier | 0.07 ms | 0.17 ms | 0.28 ms | 733 ms | 487 | — |
