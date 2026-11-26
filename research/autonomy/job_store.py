@@ -212,6 +212,22 @@ class JobStore:
                 raise
             return self.get(row["job_id"], _locked=True)
 
+    def release_unstarted(self, job_id: str, owner: str) -> bool:
+        """Return a lease this owner took but never started (a stop arrived inside the lease).
+
+        PENDING again with the attempt it consumed restored, so a reservation is never
+        mistaken for an execution that began: an interrupted automatic paper cycle is retired
+        as failed on restart, a returned reservation is simply run by the next owner
+        (cycle-9 review A6). Only this owner's RUNNING row is touched.
+        """
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE jobs SET status=?, lease_owner=NULL, lease_expires_at=NULL, started_at=NULL, "
+                "attempt=MAX(0, attempt-1) WHERE job_id=? AND status=? AND lease_owner=?",
+                (PENDING, job_id, RUNNING, owner))
+            self._db.commit()
+            return cur.rowcount == 1
+
     def renew_lease(self, job_id: str, owner: str, *, lease_seconds: float = 300.0) -> bool:
         """Extend one live worker lease without changing job state or attempt count."""
         now = self.clock()

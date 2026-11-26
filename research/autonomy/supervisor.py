@@ -2001,6 +2001,12 @@ class Supervisor:
             self.heartbeat()
             return None
         job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
+        if job is not None and self._stop:
+            # The stop arrived inside the lease: the job is reserved, not started. Return it
+            # (cycle-9 review A6); a stop after this point lets the job run, cooperatively.
+            self.jobs.release_unstarted(job.job_id, self.owner)
+            self.heartbeat()
+            return None
         self._check_overdue()
         if job is None:
             self._reconcile_idle_state()

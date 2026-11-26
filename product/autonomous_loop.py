@@ -620,14 +620,25 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
         good_waits = retry_pending_good_waits(today=as_of)     # aged against the settled session
     except Exception as exc:
         good_waits = {"error": f"{type(exc).__name__}: {exc}"[:200]}
-    from product.paper_learning_loop import counterfactual_observation_key
+    from product.paper_learning_loop import counterfactual_observation_key, good_wait_holds
     # The GOOD_WAIT recovery could not run: a WAIT whose credit it would have finished
     # must not be priced beside it, so no WAIT is priced this pass (lifecycle audit F1).
+    # Either kind of recovery failure is a failure of this settlement, so the outcome job
+    # retries instead of releasing learning (cycle-9 review A4).
     hold_waits = "error" in good_waits
+    if good_waits.get("error") or good_waits.get("errors"):
+        failed.append({"stage": "good_wait_recovery",
+                       "error": str(good_waits.get("error") or "; ".join(good_waits.get("errors") or []))[:200]})
     try:
         with locked_ledger() as (path, rows, _):
-            queued_units = {keyed[0] for r in rows if r.get("later_entry_pending") and not r.get("classification")
-                            for keyed in [counterfactual_observation_key(r)] if keyed is not None}
+            # Units a GOOD_WAIT credit holds (a queued fill, or a claimed credit): read under
+            # this lock, so a copy frozen after the recovery pass is held too (review A3).
+            try:
+                queued_units = set(good_wait_holds(rows))
+            except Exception as exc:
+                hold_waits = True
+                queued_units = set()
+                failed.append({"stage": "good_wait_holds", "error": f"{type(exc).__name__}: {exc}"[:200]})
             rewritten = []
             for row in rows:
                 if row.get("classification") or row.get("outcome"):

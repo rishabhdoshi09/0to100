@@ -249,7 +249,7 @@ def test_an_apply_during_a_re_plan_is_never_overwritten(f1, monkeypatch):
     def copy_then_apply(src, dst):
         copied = quiet_copy(src, dst)
         if not refused:
-            with pytest.raises(SystemExit, match="in use by plan") as exc:
+            with pytest.raises(SystemExit, match="holds the manifest directory") as exc:
                 repair.apply(manifest, "test", target_is_copy=True)
             refused.append(str(exc.value))
         return copied

@@ -290,6 +290,17 @@ def _settle_pending_locked(
     replayed = replay_learning_outbox(policy_path=policy_path, floors=floors)
     failures.extend(replayed.get("errors") or [])
     conflicts: list[str] = []
+    # A WAIT unit a GOOD_WAIT credit holds (a queued fill, or a claimed credit) is never
+    # priced here: the counterfactual side owns its verdict (cycle-9 review A2). Unreadable
+    # holds hold every WAIT this run.
+    from product.paper_learning_loop import counterfactual_observation_key, good_wait_holds
+    from product.counterfactual_learning import locked_ledger as _cf_locked
+    try:
+        with _cf_locked() as (_cf, _cf_rows, _):
+            holds: dict[str, str] | None = good_wait_holds(_cf_rows, path=policy_path)
+    except Exception as exc:
+        holds = None
+        failures.append(f"good-wait holds unreadable: {type(exc).__name__}: {exc}"[:200])
 
     def _flush() -> None:
         # Exactly once across crashes (cross-review A-3). Order per chunk:
@@ -331,14 +342,21 @@ def _settle_pending_locked(
         for row in pending:
             symbol = str(row.get("symbol") or "").upper()
             as_of = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or "")[:10]
-            outcome = getter(symbol, as_of, row) if as_of else None
+            from product._paper_learning_loop_core import _wait_ordinal_state
+            wait_view = {"decision": str(row.get("selection_result") or row.get("decision") or ""),
+                         "as_of": as_of}
             fill = entered.get(symbol, "")
-            later = False
-            if fill:
-                from product._paper_learning_loop_core import _wait_ordinal_state
-                wait_view = {"decision": str(row.get("selection_result") or row.get("decision") or ""),
-                             "as_of": as_of}
-                later = _wait_ordinal_state(wait_view, fill) == "LIVE"
+            if str(wait_view["decision"]).upper() == "WAIT":
+                keyed = counterfactual_observation_key({"as_of": as_of, "symbol": symbol,
+                                                        "reason_code": row.get("reason_code")})
+                if holds is None or (keyed is not None and keyed[0] in holds):
+                    held = (holds or {}).get(keyed[0] if keyed else "", "")
+                    if not (held and _wait_ordinal_state(wait_view, held) == "LIVE"):
+                        pending_n += 1                 # its unit's fill is still being verified
+                        continue
+                    fill = held
+            outcome = getter(symbol, as_of, row) if as_of else None
+            later = bool(fill) and _wait_ordinal_state(wait_view, fill) == "LIVE"
             if outcome is None and not later:
                 pending_n += 1
                 continue

@@ -57,10 +57,10 @@ if point.startswith(("pause-write:", "die-write:")):
     sir._write_manifest = write
 elif point == "die-before-rename":
     real_replace = os.replace
-    def replace(src, dst):
+    def replace(src, dst, **kw):
         if str(dst).endswith(".json"):
             os._exit(137)                                 # the temp file is written and synced; no rename
-        return real_replace(src, dst)
+        return real_replace(src, dst, **kw)
     os.replace = replace
 
 try:
@@ -130,7 +130,7 @@ def test_a_plan_paused_after_its_check_refuses_a_concurrent_apply(f1, tmp_path):
     m = json.loads(manifest.read_text())
     # Before the lock: the apply repaired the target and recorded its backup, then the plan's
     # rename erased that record (state planned, no backup) beside a repaired database.
-    assert rc == 2 and "in use by plan" in out["refused"], out
+    assert rc == 2 and "holds the manifest directory" in out["refused"], out
     assert prc == 0 and m["plan_id"] == planned["plan_id"] and "backup" not in m
     assert _stale(db, tmp_path) == 4                                       # never repaired
     assert repair.apply(manifest, "test", target_is_copy=True)["state"] == "applied"   # the retry
@@ -145,7 +145,7 @@ def test_two_concurrent_plans_publish_exactly_one(f1, tmp_path):
     paused.release()
     prc, planned = paused.result()
     # Before the lock: both reported success; the second's plan was silently replaced.
-    assert rc == 2 and "in use by plan" in out["refused"], out
+    assert rc == 2 and "holds the manifest directory" in out["refused"], out
     assert prc == 0 and json.loads(manifest.read_text())["plan_id"] == planned["plan_id"]
 
 
@@ -160,7 +160,7 @@ def test_an_apply_paused_before_its_final_record_refuses_every_other_command(f1,
     assert manifest.read_text() == on_disk                            # nothing written beside it
     paused.release()
     prc, applied = paused.result()
-    assert rc == 2 and "in use by apply" in out["refused"], out
+    assert rc == 2 and "holds the manifest directory" in out["refused"], out
     assert prc == 0 and applied["state"] == "applied"
     m = json.loads(manifest.read_text())
     assert m["state"] == "applied" and m["backup"] == applied["backup"] and Path(m["backup"]).is_file()
@@ -176,7 +176,7 @@ def test_a_rollback_paused_mid_record_refuses_a_re_plan(f1, tmp_path):
     rc, out = _run(tmp_path, "plan", db, manifest)
     paused.release()
     prc, rolled = paused.result()
-    assert rc == 2 and "in use by rollback" in out["refused"], out
+    assert rc == 2 and "holds the manifest directory" in out["refused"], out
     assert prc == 0 and rolled["state"] == "rolled_back"
     m = plan_f1(db, manifest)                          # afterwards a re-plan keeps the history
     assert applied["backup"] in m["earlier_backups"] and Path(applied["backup"]).is_file()
@@ -200,7 +200,7 @@ def test_a_symlinked_directory_alias_meets_the_same_lock(f1, tmp_path):
     finally:
         paused.release()
     assert paused.result()[0] == 0
-    assert rc == 2 and "in use by plan" in out["refused"], out
+    assert rc == 2 and "holds the manifest directory" in out["refused"], out
 
 
 def test_a_differently_cased_name_meets_the_same_lock(f1, tmp_path):
@@ -211,7 +211,7 @@ def test_a_differently_cased_name_meets_the_same_lock(f1, tmp_path):
     finally:
         paused.release()
     assert paused.result()[0] == 0
-    assert rc == 2 and "in use by plan" in out["refused"], out
+    assert rc == 2 and "holds the manifest directory" in out["refused"], out
 
 
 def test_a_hard_linked_manifest_is_refused_by_every_command(f1, tmp_path):
@@ -252,21 +252,36 @@ def test_an_interrupted_publication_keeps_the_old_record_whole(f1, tmp_path):
     assert m["state"] == "planned" and applied["backup"] in m["earlier_backups"]
 
 
-def test_a_lock_removed_while_held_refuses_the_write(f1, monkeypatch):
-    db, manifest = f1
+def test_a_directory_swapped_while_locked_refuses_the_write(f1, tmp_path, monkeypatch):
+    """The lock is the manifest's directory itself (GPT C9B-01): there is no lock file to remove.
+    A directory renamed away (and its name taken by a new one) while a plan holds it refuses the
+    publication; the record in the renamed directory is untouched."""
+    db, _ = f1
+    ops = tmp_path.resolve() / "ops"
+    ops.mkdir()
+    manifest = ops / "repair.json"
     plan_f1(db, manifest)
     before = manifest.read_text()
     quiet_copy = repair._quiet_copy
 
-    def copy_then_remove_lock(src, dst):
+    def copy_then_swap(src, dst):
         copied = quiet_copy(src, dst)
-        repair._lock_path(manifest.resolve()).unlink()             # a second holder could now lock a new file
+        ops.rename(ops.with_name("ops-moved"))
+        ops.mkdir()
         return copied
 
-    monkeypatch.setattr(repair, "_quiet_copy", copy_then_remove_lock)
-    with pytest.raises(SystemExit, match="removed or replaced while it was held"):
-        repair.plan(db, manifest.parent / "stage2", manifest)
-    assert manifest.read_text() == before
+    monkeypatch.setattr(repair, "_quiet_copy", copy_then_swap)
+    with pytest.raises(SystemExit, match="moved or replaced while locked"):
+        repair.plan(db, tmp_path / "stage2", manifest)
+    assert (tmp_path / "ops-moved" / "repair.json").read_text() == before and not manifest.exists()
+
+
+def test_no_lock_file_is_ever_created(f1):
+    db, manifest = f1
+    plan_f1(db, manifest)
+    repair.apply(manifest, "test", target_is_copy=True)
+    repair.rollback(manifest, target_is_copy=True)
+    assert not [p for p in manifest.parent.iterdir() if p.name.endswith(".lock") and "repair" in p.name]
 
 
 def test_a_manifest_is_never_written_without_its_lock(tmp_path):

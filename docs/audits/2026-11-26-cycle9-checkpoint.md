@@ -42,13 +42,39 @@ numbers, not physical durability: physical durability rests on the barriers meas
 **Group commit was not built.** Freezes are interleaved with per-decision work that uses the returned
 freeze id. Batching would acknowledge a freeze before its durable commit, or restructure every producer.
 
+## GPT cross-review of `161f7cbe..a8cb2eef` (two read-only passes)
+
+Part A covered learning, settlement and autonomy (A1–A6). Part B covered the maintenance tool and research inputs
+(C9B-01–07). Each claim was made a test (`tests/test_cycle9_review.py`) and run on `a8cb2eef`: **13 of 13
+tested claims failed there**. A1 and A5 were not built as tests; their verdicts follow.
+
+| Claim | Verdict | Fix |
+|---|---|---|
+| **A2 (P0)** The forward settler priced a WAIT unit as MISSED_WINNER (with its reason-policy observation) while its verified fill was queued | **confirmed** | `good_wait_holds()` (queued marks plus claimed GOOD_WAIT units) is one source of truth. The forward settler settles a held WAIT only as GOOD_WAIT from that fill, else it waits. The recovery reads the winning claim, and a unit decided elsewhere first is never stamped GOOD_WAIT (`later_entry_superseded_by`) |
+| **A3 (P1)** One unit could get two labels: a second copy with its own expired fill, or a copy frozen right after the recovery | **confirmed** | An expired or dropped copy takes its unit's label in the same pass. Official pricing reads the holds under its own lock, so claimed units are held too |
+| **A4 (P1)** A failed GOOD_WAIT recovery still reported the EOD job SUCCEEDED and released learning | **confirmed** | Both failure forms go into `failed`, so the integrity wrapper retries |
+| **A6 (P2)** A stop inside the lease left an unstarted paper cycle RUNNING, so it would be retired as failed after a kill | **confirmed** | `JobStore.release_unstarted` returns the reservation (PENDING, attempt restored) |
+| **A1 (P0 per GPT)** A crash after the paper fill is saved and before its mark loses that credit | **known residual, not fixed this cycle** | It needs reconciliation against the paper book (decision id plus fill session). With A2's holds, the WAIT then settles on its price path, consistently on both settlers |
+| **A5 (P2)** An unlocked external edit between the append and the post-append stat is trusted | **residual** | Only a writer outside the lock in a microsecond window can do this. The next interrupted append then refuses loudly (an intent mismatch). Hand edits need the desk stopped |
+| **C9B-01 (P0)** A cleanup that deleted the lock file let a second command lock a new inode and erase an apply's record | **confirmed** | The lock is now the manifest's **directory**, pinned (`O_DIRECTORY\|O_NOFOLLOW`) and flocked. All manifest reads and writes go through that descriptor. A path that stops naming it refuses. No lock file exists |
+| **C9B-07 (P2)** A parent swap created the lock file beside the database | **confirmed** | No file is created to lock. A swapped parent fails the no-follow open or the identity check against the target's directory |
+| **C9B-02 (P0)** An overlay published after `recorded_at` (during the reads) reached a frozen row | **confirmed** | The hook stamps `recorded_at` AFTER every input is read |
+| **C9B-03 (P0)** A split with an ex-date after the cutoff (applied on read by the store) rescaled the kept bars | **confirmed** (absolute prices only; ratios unchanged) | Factors with an ex-date after the cutoff are undone on the kept bars (`ca_undone_after_cutoff`) |
+| **C9B-04 (P1)** A store rebuild between two symbol reads ranked two store generations together | **confirmed** | The store revision is read before and after. If it changed, a bhavcopy generation ranks nothing (`STORE_CHANGED_DURING_READ`) |
+| **C9B-05 (P1)** Withheld sets still persisted trend ranks | **confirmed** | Withheld sets carry no trend rank either |
+| **C9B-06 (P1)** One excluded row voided Spearman for the whole sample and inflated its n | **confirmed** | Only rows that carry a rank are paired |
+
+Mutants: 14 of 14 killed. Two survivors on the first run exposed redundant guards: the A3 hold plus adoption on the next pass,
+and the A4 holds-failure path. The tests now separate them (a one-pass assertion, and a credit-only failure).
+One mutant is equivalent: dropping `O_NOFOLLOW` from the directory open is still refused, because the identity check
+against the target's directory catches it.
+
 ## Residual risks
 
-- **GOOD_WAIT:** a crash after the paper fill is saved and before its mark loses that one credit. The
-  ledger and the policies agree (an under-count, never a double count).
+- **GOOD_WAIT (A1):** a crash after the paper fill is saved and before its mark loses that one credit. It needs a
+  reconciliation against the paper book, which is not built. Both settlers then price the WAIT consistently.
 - **Manifest lock:** a writer outside the tool (an edit, a restore, an older version) is caught only by
-  the publication re-check. A case-fold mutant is equivalent on the case-insensitive Mac volume; the
-  case-alias test kills it on Linux.
+  the publication re-check. Commands on manifests in ONE directory are serialized (directory lock).
 - **feature002:** rows frozen before `f002-input.v2` carry no record-time availability check and stay as
   they are, never re-derived. kite_historical / yfinance sets are uncertified.
 - **Stop:** a job already running when SIGTERM arrives still runs to completion or to the host's SIGKILL

@@ -560,10 +560,10 @@ def _replaceable_prior(out: Path) -> dict[str, Any] | None:
 
 def _prior_manifest(out: Path) -> dict[str, Any] | None:
     """The manifest already at ``out`` (None when there is none); anything else there is refused."""
-    if not out.exists():
+    if not _manifest_exists(out):
         return None
     try:
-        prior = json.loads(out.read_text())
+        prior = json.loads(_read_manifest_text(out))
     except (OSError, ValueError):
         prior = None
     if not (isinstance(prior, dict) and prior.get("tool") == TOOL):
@@ -610,24 +610,16 @@ def _check_manifest_place(real: Path, target: Path) -> None:
         raise SystemExit(f"refusing: the manifest must not be in the database's directory ({target.parent})")
 
 
-#: Manifest locks this process holds: real manifest path -> (descriptor, lock identity, lock path).
-_HELD: dict[str, tuple[int, tuple[int, int], Path]] = {}
+#: Manifest directories this process holds locked: real manifest path -> (directory fd, its identity).
+_HELD: dict[str, tuple[int, tuple[int, int]]] = {}
 
 
-def _lock_path(real: Path) -> Path:
-    """The manifest's lock: a plain file BESIDE it, never replaced and never deleted, so its
-    identity does not change when the manifest's inode is replaced by each write. Named after
-    the CASE-FOLDED manifest name inside the manifest's physical directory, so every spelling
-    of one manifest (a symlinked or firmlinked directory, a different case on a
-    case-insensitive volume) meets the same lock."""
-    return real.parent / f".{real.name.casefold()}.{TOOL}.lock"
-
-
-def _check_single_link(real: Path) -> None:
-    """A hard-linked manifest has a second name this lock does not cover: refused. (A name
+def _check_single_link(real: Path, dir_fd: int | None = None) -> None:
+    """A hard-linked manifest has a second name the lock may not cover: refused. (A name
     swapped to a SYMLINK is not followed: the write replaces the entry, GPT C8-03.)"""
     try:
-        st = os.lstat(real)
+        st = (os.stat(real.name, dir_fd=dir_fd, follow_symlinks=False) if dir_fd is not None
+              else os.lstat(real))
     except FileNotFoundError:
         return
     if S.S_ISREG(st.st_mode) and st.st_nlink != 1:
@@ -636,75 +628,95 @@ def _check_single_link(real: Path) -> None:
 
 
 @contextlib.contextmanager
-def _manifest_lock(real: Path, command: str):
-    """Exclusive, non-blocking lock on one manifest for a whole plan / apply / rollback.
+def _manifest_lock(real: Path, command: str, target_dir: Path):
+    """Exclusive, non-blocking lock on the manifest's DIRECTORY for a whole plan / apply / rollback.
 
     Serializes every writer of the manifest (cycle-9 item 1): the plan's check-to-rename
-    window, two applies, an apply beside a rollback. Fails closed: a held lock refuses at
-    once (the other command is named), never waits. The kernel releases it when its holder
-    exits or dies, so a retry after a crash proceeds. Lock order is always this lock first,
-    then SQLite's exclusive lock on the target.
+    window, two applies, an apply beside a rollback. The lock is the directory itself, opened
+    once (``O_DIRECTORY|O_NOFOLLOW``) and pinned: no lock file exists that a cleanup could
+    delete or replace (GPT C9B-01), nothing is ever created to take it (C9B-07), and every
+    spelling of the manifest (a symlinked or firmlinked directory, another case) meets the
+    same lock. All reads and writes of the manifest under it go through that descriptor, so
+    a directory renamed or swapped afterwards can never redirect them. Fails closed: a held
+    lock refuses at once, never waits; the kernel releases it when its holder exits or dies.
+    Commands on manifests in one directory are serialized. Lock order is always this lock
+    first, then SQLite's exclusive lock on the target.
     """
     import fcntl
 
     real = Path(real)
-    if os.path.realpath(real.parent) != str(real.parent):
-        raise SystemExit(f"refusing: the manifest's directory {real.parent} is not its real path (a symlink?)")
-    lock = _lock_path(real)
     try:
-        fd = os.open(str(lock), os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600)
+        dfd = os.open(str(real.parent), os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW)
     except OSError as exc:
-        raise SystemExit(f"refusing: the manifest lock {lock} cannot be opened as a plain file ({exc})") from None
+        raise SystemExit(f"refusing: the manifest's directory {real.parent} cannot be opened as a directory "
+                         f"itself ({exc}); is it a symlink?") from None
     try:
-        st = os.fstat(fd)
-        if not S.S_ISREG(st.st_mode) or st.st_nlink != 1:
-            raise SystemExit(f"refusing: the manifest lock {lock} is not a plain file with one link")
+        st = os.fstat(dfd)
+        identity = (st.st_dev, st.st_ino)
+        if identity == _identity(Path(target_dir)):
+            raise SystemExit(f"refusing: the manifest must not be in the database's directory ({target_dir})")
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(dfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            holder = os.pread(fd, 200, 0).decode("utf-8", "replace").strip() or "another command"
-            raise SystemExit(f"refusing: {real.name} is in use by {holder}; wait for it to finish, then "
-                             "re-run (one plan/apply/rollback per manifest at a time)") from None
+            raise SystemExit(f"refusing: another plan/apply/rollback holds the manifest directory {real.parent}; "
+                             "wait for it to finish, then re-run") from None
         except OSError as exc:
-            raise SystemExit(f"refusing: the manifest lock {lock} cannot be taken ({exc})") from None
-        named = os.lstat(lock)
-        if (named.st_dev, named.st_ino) != (st.st_dev, st.st_ino):
-            raise SystemExit(f"refusing: the manifest lock {lock} was replaced while it was taken")
-        _check_single_link(real)
-        os.ftruncate(fd, 0)
-        os.pwrite(fd, f"{command} (pid {os.getpid()})\n".encode(), 0)
-        _HELD[str(real)] = (fd, (st.st_dev, st.st_ino), lock)
+            raise SystemExit(f"refusing: the manifest directory {real.parent} cannot be locked ({exc})") from None
+        if _identity(real.parent) != identity:
+            raise SystemExit(f"refusing: the manifest's directory {real.parent} was moved while it was locked")
+        _check_single_link(real, dfd)
+        _HELD[str(real)] = (dfd, identity)
         try:
             yield
         finally:
             _HELD.pop(str(real), None)
     finally:
-        os.close(fd)                                   # releases the lock
+        os.close(dfd)                                  # releases the lock
 
 
 @contextlib.contextmanager
 def _locked_record(real: Path, command: str):
-    """apply / rollback: the manifest's place is checked against the target it names BEFORE
-    the lock file is created (never beside the database), then the lock is taken; the caller
-    re-reads the manifest under it."""
+    """apply / rollback: the manifest's place is checked against the target it names, the
+    lock is taken (and its directory compared with the target's), then the caller re-reads
+    the manifest under it."""
     peek = _load(real)
-    _check_manifest_place(real, _entry(Path(peek["target"])))
-    with _manifest_lock(real, command):
+    target = _entry(Path(peek["target"]))
+    _check_manifest_place(real, target)
+    with _manifest_lock(real, command, target.parent):
         yield
 
 
-def _require_lock(path: Path) -> None:
-    """Every manifest write is made under that manifest's lock, still held by its file."""
+def _require_lock(path: Path) -> int:
+    """The held directory descriptor of ``path``'s manifest; refused when not held, or when the
+    path no longer names the locked directory."""
     held = _HELD.get(str(path))
     if held is None:
         raise SystemExit(f"refusing: {path.name} would be written without its lock")
-    _fd, identity, lock = held
+    dfd, identity = held
+    if _identity(Path(path).parent) != identity:
+        raise SystemExit(f"refusing: the manifest's directory {Path(path).parent} was moved or replaced while locked")
+    return dfd
+
+
+def _read_manifest_text(path: Path) -> str:
+    """The manifest's text: through the locked directory when held (never redirected)."""
+    held = _HELD.get(str(path))
+    if held is None:
+        return Path(path).read_text()
+    fd = os.open(Path(path).name, os.O_RDONLY | _NOFOLLOW, dir_fd=held[0])
+    with os.fdopen(fd, "r") as fh:
+        return fh.read()
+
+
+def _manifest_exists(path: Path) -> bool:
+    held = _HELD.get(str(path))
+    if held is None:
+        return Path(path).exists()
     try:
-        named = os.lstat(lock)
-    except OSError:
-        named = None
-    if named is None or (named.st_dev, named.st_ino) != identity:
-        raise SystemExit(f"refusing: the manifest lock {lock} was removed or replaced while it was held")
+        os.stat(Path(path).name, dir_fd=held[0], follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def _write_manifest(path: Path, m: dict[str, Any]) -> None:
@@ -713,24 +725,34 @@ def _write_manifest(path: Path, m: dict[str, Any]) -> None:
     The shared writer opened a predictable ``<name>.tmp-<pid>`` with ``"w"``: a
     symlink placed there truncated whatever it pointed at, the database included
     (GPT V2-04). ``os.replace`` then swaps the directory entry, never its target.
-    Only under the manifest's lock (cycle-9 item 1).
+    Only under the manifest's lock, and only through its locked directory descriptor
+    (cycle-9 item 1, GPT C9B-01/07).
     """
+    import errno
+
     path = Path(path)
     if os.path.realpath(path.parent) != str(path.parent):
         raise SystemExit(f"refusing: the manifest's directory {path.parent} is not its real path (a symlink?)")
-    _require_lock(path)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    dfd = _require_lock(path)
+    tmp = f".{path.name}.{uuid.uuid4().hex}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o644, dir_fd=dfd)
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(json.dumps(m, indent=2, default=str))
             fh.flush()
             _full_fsync(fh.fileno())
-        os.replace(tmp, path)
+        os.replace(tmp, path.name, src_dir_fd=dfd, dst_dir_fd=dfd)
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        try:
+            os.unlink(tmp, dir_fd=dfd)
+        except FileNotFoundError:
+            pass
         raise
-    _fsync_dir(path.parent)
+    try:
+        _full_fsync(dfd)
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)):
+            raise
 
 
 # ── the repair routine (one code path for plan's copy and apply's live target) ──
@@ -800,7 +822,7 @@ def plan(target: str | Path, staging: str | Path, out: str | Path, *, expect_sta
     _check_outputs(entry, staging, out)
     out = _manifest_path(out)
     _check_manifest_place(out, entry)
-    with _manifest_lock(out, "plan"):
+    with _manifest_lock(out, "plan", entry.parent):
         return _plan_locked(entry, staging, out, expect_stale)
 
 
@@ -883,7 +905,7 @@ REQUIRED_GATES = ("damage_found", "index_damage_only", "supported_schema", "repa
 
 
 def _load(manifest_path: Path) -> dict[str, Any]:
-    m = json.loads(Path(manifest_path).read_text())
+    m = json.loads(_read_manifest_text(Path(manifest_path)))
     if m.get("tool") != TOOL or m.get("version") != VERSION:
         raise SystemExit(f"refusing: not a {TOOL} v{VERSION} manifest (an older version's manifest carries other "
                          "recovery rules: re-plan with this version)")

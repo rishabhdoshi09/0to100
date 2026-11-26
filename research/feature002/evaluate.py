@@ -74,16 +74,19 @@ def maturity(rows: list[dict[str, Any]] | None = None, *, path=None) -> dict[str
 
 
 def spearman_rank(ranks: list[float], ys: list[float]) -> dict[str, Any]:
-    if len(ranks) < 8:
-        return {"n": len(ranks), "rho": None}
+    # Only rows that carry a rank are a pair: a row excluded from its cross-section (cycle 9)
+    # has none, and must neither void the statistic nor count in its n (GPT C9B-06).
+    pairs = [(x, y) for x, y in zip(ranks, ys) if x is not None and y is not None]
+    if len(pairs) < 8:
+        return {"n": len(pairs), "rho": None}
     try:
         from scipy.stats import spearmanr
         # lower rank number = better pick; invert so higher predicted quality
-        pred = [-float(x) for x in ranks]
-        r = spearmanr(pred, ys)
-        return {"n": len(ranks), "rho": float(r.statistic), "p": float(r.pvalue)}
+        pred = [-float(x) for x, _ in pairs]
+        r = spearmanr(pred, [float(y) for _, y in pairs])
+        return {"n": len(pairs), "rho": float(r.statistic), "p": float(r.pvalue)}
     except Exception:
-        return {"n": len(ranks), "rho": None}
+        return {"n": len(pairs), "rho": None}
 
 
 def top_minus_bottom(rows: list[dict[str, Any]], rank_key: str, outcome_key: str = "ret_5d") -> dict[str, Any]:

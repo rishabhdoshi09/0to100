@@ -209,6 +209,22 @@ def _input_provenance(hist, cutoff: str, recorded_at: str | None = None):
         return hist, dict(prov, source=prov["source"], error="unparsable index")
     prov["bars_after_cutoff_dropped"] = dropped
     prov["bars_unavailable_at_record_dropped"] = unavailable
+    # The store back-adjusts every bar for each corporate action on read, a split AFTER the
+    # cutoff included: the kept bars would carry a factor no one knew at the cutoff (GPT
+    # C9B-03). Every kept bar is before such an ex-date, so the factor is uniform: undo it.
+    later = [(str(ex)[:10], float(f)) for ex, f in (attrs.get("ca_events") or [])
+             if str(ex)[:10] > str(cutoff)[:10] and float(f) > 0]
+    if later and len(cut):
+        factor = 1.0
+        for _ex, f in later:
+            factor *= f
+        cut = cut.copy()
+        for col in ("open", "high", "low", "close"):
+            if col in cut.columns:
+                cut[col] = cut[col].astype(float) * factor
+        if "volume" in cut.columns:
+            cut["volume"] = cut["volume"].astype(float) / factor
+        prov["ca_undone_after_cutoff"] = later
     prov["bars"] = int(len(cut))
     prov["symbol_hist_as_of"] = _as_of_from_hist(cut) if len(cut) else None
     # A live (intraday) bar is not an archive bar: when the overlaid bar survived
@@ -260,6 +276,15 @@ def _rank_inputs(inputs: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
                certified=source in CERTIFIED_SOURCES, excluded=dict(sorted(excluded.items())),
                ranked=sorted(s for s in members if s not in excluded))
     return out
+
+
+def _store_revision():
+    """The official store's generation (revision, map identity); None when unavailable."""
+    try:
+        from data.bhavcopy_store import store_revision
+        return store_revision()
+    except Exception:
+        return None
 
 
 def _as_of_from_hist(hist) -> str | None:
@@ -360,8 +385,15 @@ def build_shadow_records(
     sectors, sector_ver = _sector_map()
     symbols = [str(c.get("symbol") or "").upper() for c in detached if c.get("symbol")]
     hists, inputs = {}, {}
+    revision_before = _store_revision()
+    raw = {sym: _hist(sym) for sym in symbols}
+    revision_after = _store_revision()
+    # The record time is taken AFTER every input was read (GPT C9B-02): a bar published
+    # while the reads ran (a live overlay minute later) existed by then. A callable is
+    # evaluated here; a string is used as given (tests, replays).
+    recorded_at = recorded_at() if callable(recorded_at) else recorded_at
     for sym in symbols:
-        hists[sym], inputs[sym] = _input_provenance(_hist(sym), session_date, recorded_at)
+        hists[sym], inputs[sym] = _input_provenance(raw[sym], session_date, recorded_at)
     as_ofs = [_as_of_from_hist(h) for h in hists.values() if h is not None and len(h)]
     # Feature bars are last official/hist date. Session date stays the IST
     # scan calendar so weekend/Monday scans do not collide with Friday event_ids.
@@ -369,6 +401,10 @@ def build_shadow_records(
     if as_ofs:
         hist_as_of = max(as_ofs)
     rank_inputs = _rank_inputs(inputs)
+    if (rank_inputs["coherent"] and (rank_inputs.get("generation") or {}).get("source") == "bhavcopy_store"
+            and revision_before != revision_after):
+        # The store published another generation while the frames were read (GPT C9B-04).
+        rank_inputs = dict(rank_inputs, coherent=False, withheld="STORE_CHANGED_DURING_READ", ranked=[])
     excluded = dict(rank_inputs["excluded"])
     if rank_inputs["coherent"] and rank_inputs["generation"]:
         hist_as_of = rank_inputs["generation"]["as_of"] or hist_as_of
@@ -432,7 +468,9 @@ def build_shadow_records(
         # no cross-sectional RS, so nothing derived from it either (C7V-08)
         for row in rows:
             row.update({"rs_rank": None, "rs_pctl_in_set": None, "r3_score": None,
-                        "combined_shadow_rank": None})
+                        "combined_shadow_rank": None,
+                        # a withheld set ranks nothing across generations, trend included (C9B-05)
+                        "trend_rank": None, "trend_pctl_in_set": None})
     elif excluded:
         # The cross-section is the ranked generation alone; an excluded row keeps its own
         # features and provenance, but no rank beside inputs it does not share (item 4).
@@ -532,7 +570,7 @@ def observe_production_scan(
         cset, rows = build_shadow_records(
             snapshot,
             session_date=session,
-            recorded_at=recorded,
+            recorded_at=_ist_now_iso,           # stamped after the inputs are read (C9B-02)
             scan_cycle_id=cycle,
             source=src,
             regime_label=_regime(),

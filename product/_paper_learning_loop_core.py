@@ -740,6 +740,36 @@ def _claimed_good_wait_units(path=None) -> dict[str, str]:
     return units
 
 
+def good_wait_holds(rows: Sequence[Mapping[str, Any]], *, path=None) -> dict[str, str]:
+    """{unit key: verified fill} of every unit a GOOD_WAIT credit holds (cycle-9 review A2, A3).
+
+    A unit is held while one of its copies carries a queued fill (its fill session), or once
+    the GOOD_WAIT credit has claimed it (its verified fill). No settler may price a held
+    unit: the official one waits, and the forward one settles it GOOD_WAIT only from that
+    fill. ``rows`` are the counterfactual ledger's rows as read under its lock.
+    """
+    holds: dict[str, str] = {}
+    for row in rows:
+        pending = row.get("later_entry_pending")
+        if row.get("classification") or not isinstance(pending, Mapping):
+            continue
+        keyed = counterfactual_observation_key(row)
+        if keyed is not None:
+            holds.setdefault(keyed[0], str(pending.get("fill_session") or "")[:10])
+    holds.update(_claimed_good_wait_units(path))
+    return holds
+
+
+def _unit_classification(key: str, path=None) -> str:
+    """The classification a claimed COUNTERFACTUAL unit was decided with ('' when unknown)."""
+    from product import learning_observations as LO
+    from product.learning_policy_store import policy_path
+
+    body = LO.claim_payload(LO.ledger_path_for(policy_path(path)), "COUNTERFACTUAL", key) or {}
+    settled = body.get("settled") if isinstance(body, Mapping) else None
+    return str((settled or {}).get("classification") or "") if isinstance(settled, Mapping) else ""
+
+
 def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = None,
                              today: str | None = None, symbols=None) -> dict[str, Any]:
     """Credit queued later fills; GOOD_WAIT only when the ordinal verifies LIVE (QT-07).
@@ -790,12 +820,24 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
                                  forward_return_pct=None, later_entered=True)
                 settled["later_entry_verified"] = fill
                 try:
-                    ingest_counterfactual(settled, path=path, floors=floors)
+                    applied = ingest_counterfactual(settled, path=path, floors=floors)
+                    superseded = (_unit_classification(keyed[0], path)
+                                  if keyed is not None and isinstance(applied, Mapping)
+                                  and applied.get("duplicate_observation") else GOOD_WAIT)
                 except Exception as exc:
                     # This row stays queued for the next pass; the others are still
                     # verified, expired or dropped and persisted (QT-C2-08).
                     out.setdefault("errors", []).append(f"{row.get('symbol')}: {type(exc).__name__}: {exc}"[:200])
                     rewritten.append(row)
+                    continue
+                if superseded and superseded != GOOD_WAIT:
+                    # Another settlement decided this unit first (cycle-9 review A2): the row
+                    # never claims GOOD_WAIT beside it; it settles like its unit, on price.
+                    out["superseded"] = out.get("superseded", 0) + 1
+                    kept = {k: v for k, v in row.items() if k != "later_entry_pending"}
+                    kept["later_entry_superseded_by"] = superseded
+                    rewritten.append(kept)
+                    changed = True
                     continue
                 rewritten.append(settled)
                 out["credited"] += 1
@@ -817,16 +859,20 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
                 out["expired"] += 1
             kept = {k: v for k, v in row.items() if k != "later_entry_pending"}
             kept["later_entry_unverified" if state == "UNVERIFIABLE" else "later_entry_expired"] = fill
+            if keyed is not None and is_wait:
+                siblings.append(len(rewritten))      # its unit may still be credited by another copy (A3)
             rewritten.append(kept)
             changed = True
         # Another copy of a unit credited in this sweep (one cycle's re-freeze of the same
-        # day, symbol and reason) carries the unit's label, never a price-path one beside it.
+        # day, symbol and reason, unmarked or with a fill of its own that expired) carries
+        # the unit's label and verified fill, never a price-path one beside it (review A3).
         for i in siblings:
             row = rewritten[i]
             keyed = counterfactual_observation_key(row)
-            fill = credited.get(keyed[0]) if keyed is not None else None
+            fill = (credited.get(keyed[0]) or claimed.get(keyed[0])) if keyed is not None else None
             if not fill:
                 continue
+            row = {k: v for k, v in row.items() if k not in ("later_entry_expired", "later_entry_unverified")}
             settled = settle(row, forward_return_pct=None, later_entered=True)
             settled["later_entry_verified"] = fill
             try:
