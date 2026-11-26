@@ -1179,13 +1179,62 @@ def _live_broker(persisted: Any) -> dict[str, Any]:
         return stale
 
 
+#: A persisted loop summary older than this is never presented as current (cycle 11).
+LOOP_SUMMARY_STALE_AFTER_S = 24 * 3600
+
+
+def _summary_age(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """When the persisted loop summary was made, its age, and whether it is stale."""
+    raw = str(summary.get("generated_at") or "")
+    try:
+        made = datetime.fromisoformat(raw)
+        made = made if made.tzinfo else made.replace(tzinfo=timezone.utc)
+        age_s = max(0.0, (datetime.now(timezone.utc) - made).total_seconds())
+    except ValueError:
+        return {"generated_at": None, "age_hours": None, "stale": True,
+                "note": "The loop summary carries no time: it is treated as stale."}
+    stale = age_s > LOOP_SUMMARY_STALE_AFTER_S
+    return {"generated_at": raw, "age_hours": round(age_s / 3600.0, 1), "stale": stale,
+            "note": (f"The product loop last ran {age_s / 86400.0:.1f} day(s) ago; its sections show that run, "
+                     "not now. Broker state is checked live." if stale else "")}
+
+
+def _current_readiness(persisted: Mapping[str, Any] | None, broker: Mapping[str, Any],
+                       loop: Mapping[str, Any]) -> dict[str, Any]:
+    """The readiness block with the LIVE broker: a capability the live check denies is never claimed,
+    and a block from a stale summary is labelled with its time (cycle 11)."""
+    if not persisted:
+        readiness = dict(RDY.inspect_readiness())
+    else:
+        readiness = dict(persisted)
+        caps = dict(readiness.get("capabilities") or {})
+        caps["BROKER_LIVE_DATA_READY"] = bool(broker.get("live_data_ready"))
+        caps["EXECUTION_READY"] = bool(broker.get("execution_ready"))
+        readiness["capabilities"] = caps
+        if loop.get("stale"):
+            readiness.update(stale=True, as_of=loop.get("generated_at"))
+    readiness["broker"] = dict(broker)
+    return readiness
+
+
 def desk_projection() -> dict[str, Any]:
     summary = load_summary()
-    readiness = summary.get("readiness") or RDY.inspect_readiness()
+    loop = _summary_age(summary)
     session = str(summary.get("session_date") or "")
     committee = list((summary.get("paper") or {}).get("committee") or [])
-    broker = _live_broker(readiness.get("broker"))
+    persisted = summary.get("readiness") or None
+    broker = _live_broker((persisted or {}).get("broker"))
+    readiness = _current_readiness(persisted, broker, loop)
+    # The candidate tables belong to the same loop: a stale summary's lineage is not
+    # re-read from them on every request (a full scan of a dormant 13.8 MB store, cycle 11).
+    if loop["stale"]:
+        lifecycle: dict[str, Any] = {"withheld": "LOOP_SUMMARY_STALE"}
+        lineage_rows: list[dict[str, Any]] = []
+    else:
+        lifecycle = CL.state_counts(session)
+        lineage_rows = CL.list_candidates(session_date=session, limit=12)
     return {
+        "loop_summary": loop,
         "schema_version": 2,
         "generated_at": _now(),
         "what_quantterm_did": project_events(24),
@@ -1217,7 +1266,7 @@ def desk_projection() -> dict[str, Any]:
         },
         "what_it_learned": _what_it_learned(summary),
         "census": summary.get("census") or {},
-        "candidate_lifecycle": CL.state_counts(session),
+        "candidate_lifecycle": lifecycle,
         "judgments": {
             r.get("symbol"): {
                 "candidate_state": r.get("candidate_state"),
@@ -1246,8 +1295,9 @@ def desk_projection() -> dict[str, Any]:
                     "outcome_id": r.get("outcome_id"),
                     "opportunity_id": r.get("opportunity_id"),
                 }
-                for r in CL.list_candidates(session_date=session, limit=12)
+                for r in lineage_rows
             ],
+            **({"withheld": "LOOP_SUMMARY_STALE"} if loop["stale"] else {}),
         },
         "readiness": readiness,
         "operator_metrics": summary.get("operator_metrics") or _operator_metrics(session),
