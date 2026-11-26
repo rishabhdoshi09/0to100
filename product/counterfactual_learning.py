@@ -212,15 +212,19 @@ def _recover_append(path: Path) -> None:
 
 
 def _append_frozen_row(path: Path, prefix: bytes, row: Mapping[str, Any]) -> None:
+    separator = "\n" if prefix and not prefix.endswith(b"\n") else ""
+    _append_at(path, len(prefix), sha256(prefix).hexdigest(), separator + json.dumps(row, default=str) + "\n")
+
+
+def _append_at(path: Path, offset: int, prefix_sha256: str, text: str) -> bytes:
+    """Append ``text`` at ``offset`` under a durable intent naming the prefix it extends."""
     from core.atomic_io import atomic_write_text
 
-    separator = "\n" if prefix and not prefix.endswith(b"\n") else ""
-    text = separator + json.dumps(row, default=str) + "\n"
     suffix = text.encode("ascii")
     intent_path = _append_intent_path(path)
     atomic_write_text(intent_path, json.dumps({
-        "offset": len(prefix),
-        "prefix_sha256": sha256(prefix).hexdigest(),
+        "offset": offset,
+        "prefix_sha256": prefix_sha256,
         "suffix": text,
         "suffix_sha256": sha256(suffix).hexdigest(),
     }), durable=True)
@@ -228,6 +232,116 @@ def _append_frozen_row(path: Path, prefix: bytes, row: Mapping[str, Any]) -> Non
     # survive a power cut before we touch the append-only ledger.
     _sync_append_directory(intent_path)
     _finish_append(path, suffix)
+    return suffix
+
+
+# ── the freeze path's index (lifecycle audit F8) ─────────────────────────────
+#
+# Every freeze used to read, decode and json-parse the WHOLE ledger (and hash it for the
+# intent) only to ask "is this counterfactual_id already there?": about 1 s per freeze on a
+# 32 MB ledger, so a cycle's freezes cost O(n²). The index answers it from memory and is
+# trusted ONLY while the file's identity (device, inode, size, mtime and ctime, all in ns)
+# is exactly what this process last read or wrote under the writer lock: any other write,
+# by another process, a settlement rewrite (a new inode), a torn-tail truncation or a hand
+# edit, changes it and the ledger is read and validated in full again, as before. The
+# validation is the same as _read_ledger's: one invalid line anywhere still refuses.
+
+_INDEX: dict[str, dict[str, Any]] = {}
+
+
+def _identity_key(st: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _build_index(path: Path) -> dict[str, Any]:
+    """Read and validate the whole ledger once (as _read_ledger does); first offset per id."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return {"key": None, "size": 0, "newline": True, "digest": sha256(), "ids": {}}
+    try:
+        before = os.fstat(fd)
+        chunks, offset = [], 0
+        while chunk := os.pread(fd, 1 << 20, offset):
+            chunks.append(chunk)
+            offset += len(chunk)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if _identity_key(before) != _identity_key(after):
+        raise ValueError(f"counterfactual ledger {path} changed while it was read under the writer lock")
+    raw = b"".join(chunks)
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"invalid UTF-8 in counterfactual ledger {path}") from exc
+    ids: dict[str, tuple[int, int]] = {}
+    start = 0
+    for number, line in enumerate(raw.split(b"\n"), start=1):
+        end = start + len(line)
+        text = line.decode("utf-8")
+        if text.strip():
+            try:
+                row = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid JSON in counterfactual ledger {path}, line {number}") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"expected an object in counterfactual ledger {path}, line {number}")
+            ids.setdefault(str(row.get("counterfactual_id") or ""), (start, end))
+        start = end + 1
+    return {"key": _identity_key(after), "size": len(raw), "newline": not raw or raw.endswith(b"\n"),
+            "digest": sha256(raw), "ids": ids}
+
+
+def _current_index(path: Path) -> dict[str, Any]:
+    """The index of ``path`` as it is now (under the writer lock): reused only on an exact identity."""
+    try:
+        key = _identity_key(os.stat(path))
+    except FileNotFoundError:
+        key = None
+    cached = _INDEX.get(str(path))
+    if cached is not None and cached["key"] == key and key is not None:
+        return cached
+    _INDEX.pop(str(path), None)
+    index = _build_index(path)
+    if index["key"] is not None:
+        _INDEX[str(path)] = index
+    return index
+
+
+def _row_at(path: Path, span: tuple[int, int]) -> dict[str, Any]:
+    start, end = span
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        return json.loads(os.pread(fd, end - start, start).decode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def _freeze_append(path: str | Path | None, counterfactual_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
+    """The frozen row already in the ledger under ``counterfactual_id``, else ``row`` appended durably."""
+    from product.learning_observations import writer_lock
+
+    from core.atomic_io import quarantine_torn_jsonl_tail
+
+    target = ledger_path(path)
+    with writer_lock(target):
+        _recover_append(target)                  # an append this code began: finished or placed
+        quarantine_torn_jsonl_tail(target)       # an older append cut by a crash (lifecycle audit F3)
+        index = _current_index(target)
+        span = index["ids"].get(counterfactual_id)
+        if span is not None:
+            return _row_at(target, span)
+        line = json.dumps(row, default=str)
+        separator = "" if index["newline"] else "\n"
+        _INDEX.pop(str(target), None)            # re-trusted only once the append is complete
+        suffix = _append_at(target, index["size"], index["digest"].hexdigest(), separator + line + "\n")
+        start = index["size"] + len(separator)
+        index["digest"].update(suffix)
+        index["ids"].setdefault(counterfactual_id, (start, start + len(line)))
+        index.update(size=index["size"] + len(suffix), newline=True, key=_identity_key(os.stat(target)))
+        _INDEX[str(target)] = index
+    return dict(row)
 
 
 @contextmanager
@@ -343,12 +457,7 @@ def freeze_decision(
         "classification": None,
         "not_pnl": True,
     }
-    with locked_ledger(path) as (target_path, existing_rows, prefix):
-        for existing in existing_rows:
-            if str(existing.get("counterfactual_id") or "") == counterfactual_id:
-                return existing
-        _append_frozen_row(target_path, prefix, row)
-    return row
+    return _freeze_append(path, counterfactual_id, row)
 
 
 def classify_forward(

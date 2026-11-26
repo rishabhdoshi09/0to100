@@ -141,14 +141,27 @@ def quarantine_torn_jsonl_tail(path: str | Path) -> Path | None:
     import uuid
 
     target = Path(path)
+    # Only the last line is ever judged, so only it is read (lifecycle audit F8: this runs
+    # before every counterfactual freeze, and reading a 32 MB ledger each time was the cost).
     try:
-        raw = target.read_bytes()
+        fd = os.open(str(target), os.O_RDONLY)
     except FileNotFoundError:
         return None
-    if not raw or raw.endswith(b"\n"):
-        return None
-    cut = raw.rfind(b"\n") + 1
-    tail = raw[cut:]
+    try:
+        size = os.fstat(fd).st_size
+        if size == 0 or os.pread(fd, 1, size - 1) == b"\n":
+            return None
+        cut, end = 0, size
+        while end > 0:
+            begin = max(0, end - (1 << 16))
+            newline = os.pread(fd, end - begin, begin).rfind(b"\n")
+            if newline >= 0:
+                cut = begin + newline + 1
+                break
+            end = begin
+        tail = os.pread(fd, size - cut, cut)
+    finally:
+        os.close(fd)
     try:
         json.loads(tail.decode("utf-8"))
         return None                                # a complete row: not torn

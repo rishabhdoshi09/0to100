@@ -101,7 +101,8 @@ def test_counterfactual_freeze_appends_after_valid_unterminated_row(tmp_path):
 
 def test_counterfactual_concurrent_retries_return_the_same_projection(tmp_path, monkeypatch):
     ledger = tmp_path / "counterfactuals.jsonl"
-    read = CF._read_ledger
+    # The freeze path's whole-ledger read is _build_index since lifecycle audit F8 (cycle 9).
+    read = CF._build_index
     first_read = threading.Event()
     second_read = threading.Event()
 
@@ -116,7 +117,7 @@ def test_counterfactual_concurrent_retries_return_the_same_projection(tmp_path, 
             second_read.wait(timeout=1)
         return rows
 
-    monkeypatch.setattr(CF, "_read_ledger", interleaved_read)
+    monkeypatch.setattr(CF, "_build_index", interleaved_read)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(_freeze_rejection, ledger)
         assert first_read.wait(timeout=10)
