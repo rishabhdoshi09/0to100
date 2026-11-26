@@ -225,7 +225,7 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
     if missing:
         return {"status": "ABORTED", "validation": {"ok": False,
                 "failed": ["missing_frozen_inputs"], "missing": missing}}
-    if not bhavcopy_store._load_pkl():
+    if not bhavcopy_store._load_pkl(remove_invalid=False):
         return {"status": "ABORTED", "validation": {"ok": False,
                 "failed": ["verified_bhavcopy_store_unavailable"]}}
     if not index_store.load_index_store_from_cache():

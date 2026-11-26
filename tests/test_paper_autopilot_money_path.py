@@ -160,6 +160,23 @@ def test_watch_tier_is_rejected_not_entered(monkeypatch):
     assert out["reason_counts"] == {LOW_QUALITY_SETUP: 1}
 
 
+def test_shared_signal_log_can_fill_only_as_a_protected_exploration_probe(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_PAPER_EXPLORATION", "1")
+    book, raw, pipeline = _pipeline_book(tmp_path)
+    card = _eligible_card("INFY", reco_tier="watch", verdict="WATCH")
+    for method in card["methods"]:
+        if method["id"] in {"ev", "case"}:
+            method.update(status="fail", outcome_source="signal_log")
+
+    result = _cycle(book, [card])
+
+    assert result["taken"][0]["lane"] == "EXPLORATION"
+    position = next(iter(raw.open.values()))
+    assert 0 < position.approved_risk_pct <= 0.5
+    assert pipeline.oms.list_orders()[0].status == "PROTECTED"
+    assert card["verdict"] == "WATCH"
+
+
 def test_watch_tier_enters_only_via_learning_lane_at_half_risk_once_a_day(monkeypatch):
     # Owner 2026-11-11: keep forward paper evidence flowing. When production
     # takes nothing, one ready research name a day is taken at half risk.

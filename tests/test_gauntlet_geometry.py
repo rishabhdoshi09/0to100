@@ -52,3 +52,15 @@ def test_symbol_resume_is_atomic_and_selection_does_not_use_evaluation(tmp_path)
     assert report["evaluation"]["short"]["development_probability_positive_net"] > 0.99
     with pytest.raises(ValueError, match="different snapshot"):
         GeometryRun(db, cutoff=days[80], end=days[160], binding={"data": "version 2"})
+
+
+
+def test_frozen_snapshot_cache_survives_a_failed_read(tmp_path, monkeypatch):
+    from data import bhavcopy_store
+
+    cache = tmp_path / "store_cache.pkl"
+    cache.write_bytes(b"archive from an incompatible environment")
+    monkeypatch.setattr(bhavcopy_store, "_PKL", cache)
+
+    assert not bhavcopy_store._load_pkl(remove_invalid=False)
+    assert cache.read_bytes() == b"archive from an incompatible environment"

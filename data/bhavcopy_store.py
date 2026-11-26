@@ -365,8 +365,8 @@ def _save_pkl() -> None:
         log.debug("bhav_pkl_save_failed", error=str(exc))
 
 
-def _load_pkl() -> bool:
-    """Load the consolidated cache. False if absent/corrupt."""
+def _load_pkl(*, remove_invalid: bool = True) -> bool:
+    """Load the consolidated cache, optionally preserving an unreadable snapshot."""
     global _store, _store_last_day, _store_sessions, _pending
     try:
         import pickle
@@ -397,10 +397,11 @@ def _load_pkl() -> bool:
         return True
     except Exception as exc:
         log.debug("bhav_pkl_load_failed", error=str(exc))
-        try:
-            _PKL.unlink()                     # corrupt cache — remove it
-        except Exception:
-            pass
+        if remove_invalid:
+            try:
+                _PKL.unlink()                 # corrupt cache — remove it
+            except OSError:
+                pass
         return False
 
 
