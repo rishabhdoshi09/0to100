@@ -4,9 +4,11 @@
 verified in development. The operational gates cannot be exercised while the host's runtime storage is
 unavailable, and several gates need the owner's words. Nothing here is production-verified.
 
-- **Candidate:** the head of `claude/cycle9-20261126` (cycle 9 + cycle 10 so far). Last fully certified SHA:
-  `a55451fc` (CI 5/5 on both `claude/cycle9-20261126` and `claude/settlement-batch-20261118`; the Mac full
-  guarded suite ran at `b9e2842b`, 537 files; the one failing test there is updated by the test-only `a55451fc`).
+- **Candidate code SHA:** `9af48283af3059e0b38309e7fc8c863fe014a665` (cycle 9 + cycle 10). CI 5/5 on that
+  exact SHA (runs 45804327834 CI, 45804328008 Product Acceptance, 45804327674 Terminal UI, 45804327641 Host
+  Migration Gate, 45804327696 Dependency Vulnerability Advisory). The Mac full guarded suite ran on a frozen
+  worktree at that exact SHA: **539 files, 0 failing** (112 CPU-minutes, 4 workers). Later commits on the
+  branch are documentation only.
 - **Production:** `125880a6` on `host/mac-release-20261110`. It is untouched.
 - **Live broker:** HARD-LOCKED. No code path in this candidate unlocks it.
 
@@ -18,8 +20,8 @@ is given). OPEN: work remains.
 | # | Gate | Criterion (from existing requirements) | Status | Evidence / reason |
 |---|---|---|---|---|
 | G1 | No open release-blocking defect | Every P0/P1 in §2 closed or explicitly accepted | **OPEN** | §2: A1 (P1, accepted residual pending a design), B08 (P1, live path only, dormant) |
-| G2 | Exact-SHA CI | All 5 workflows green on the release SHA | **PASS** at `a55451fc`; re-run per new head | GitHub runs 45798607943 (CI) et al.; candidate branch 45800115001 |
-| G3 | Full guarded Mac suite | Every test file passes on the frozen release SHA (one interpreter per file, launchctl/hdiutil/kill guarded) | **PASS** at `b9e2842b` + the test-only delta | 537 files; the delta file and 9 repair-tool files green at `a55451fc` |
+| G2 | Exact-SHA CI | All 5 workflows green on the release SHA | **PASS** at `9af48283` | runs 45804327834 et al. (also `a55451fc` on both branches) |
+| G3 | Full guarded Mac suite | Every test file passes on the frozen release SHA (one interpreter per file, launchctl/hdiutil/kill guarded) | **PASS** at `9af48283` | 539 files, 0 failing, frozen detached worktree |
 | G4 | Crash, restart and idempotency | Crash-injection tests at every persistence boundary of the money and learning paths | **PASS (development)** | Cycles 2–10. Cycle 9: GOOD_WAIT (15 tests), manifest lock (17), freeze index (11), stop boundaries (5), review (15) |
 | G5 | Mutation coverage of the changed risk areas | Every targeted mutant killed, or documented as equivalent | **PASS** | Cycle 9: 57/57 (one equivalent documented). Cycle 10: each fix's base failure recorded |
 | G6 | Independent review reconciled | Each substantial cycle cross-reviewed; every claim tested; disagreements recorded | **PASS** for cycle 9 | `docs/audits/2026-11-26-cycle9-checkpoint.md`: 13/13 reproduced and fixed; A1/A5 reasoned |
@@ -39,10 +41,11 @@ is given). OPEN: work remains.
 | Pri | Item | State |
 |---|---|---|
 | P1 | **A1** A crash between the paper fill's book save and its GOOD_WAIT mark loses that credit | **Accepted residual.** A safe reconciliation needs a durable entry-origin marker on each book position. Several engines open `PaperBook` positions, so the book alone cannot tell which entries the live path credits. It is an under-count, consistent on both settlers |
-| P1 | **B08** The legacy Zerodha adapter has no idempotency after an accepted timeout | Open, **live path only**. Dormant: the real wrapper blocks every submission. A live-readiness blocker, not a paper one |
+| Live-only | **B01/C2-05** a separate broker process, **B06/B08** durable order and fill identity (the legacy Zerodha adapter has no idempotency after an accepted timeout), **B09** an EMS exit primitive | **Required before any live authorization; not in a paper release.** Dormant: the real wrapper blocks every submission and live is HARD-LOCKED, so no work was spent on them |
 | P2 | The 23 Nov Nifty disagreement (+1.12% market panel vs −1.41% F&O context) | **BLOCKED:** its evidence is on the unmounted runtime. The F&O formula (`last / ohlc.close − 1`) is correct in-session |
 | P2 | `/api/product-readiness` 12.7 s, `/api/autonomy-desk` 8.4 s | **BLOCKED:** needs a runtime copy to profile |
 | P2 | A5: an unlocked external ledger edit in a microsecond window | Accepted. It fails closed on the next interrupted append |
+| Closed earlier | The stale Kite-session READY (cycle 8, P2 list) | Already fixed in cycle 8 (a passed check counts until the next 06:00 IST; `tests/test_broker_readiness.py`). The list entry was stale |
 | Done (cycle 9) | GOOD_WAIT crash recovery; F1 manifest writers; F8 freeze cost; feature002 PIT; stop boundaries; 13 review findings | `a55451fc` |
 | Done (cycle 10) | Shutdown join deadline (C8.7-03); durable taken-evidence appends | after `a55451fc` |
 
