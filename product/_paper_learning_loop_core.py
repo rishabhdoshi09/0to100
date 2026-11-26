@@ -688,13 +688,17 @@ def _wait_ordinal_state(row: Mapping[str, Any], entry_day: str) -> str:
 LATER_ENTRY_VERIFY_MAX_DAYS = 45
 
 
-def _queue_unverified_fills(symbol: str, entry_day: str) -> int:
-    """Record a later fill on each pending WAIT of ``symbol`` whose ordinal cannot be verified YET.
+def _queue_later_fills(symbol: str, entry_day: str) -> int:
+    """Durably record a later fill on each pending WAIT of ``symbol`` it may credit, BEFORE any credit.
 
-    Without this, a fill seen while the official archive is unavailable was
-    simply lost: the next settlement classified the WAIT by price path and the
-    GOOD_WAIT it earned never came back (verification review QT-07). The
-    earliest fill is kept; nothing is credited until it verifies.
+    The marker is the credit's durable intent (lifecycle audit F1, 24 Nov). The credit used
+    to claim the unit, update two policies and rewrite this ledger in one pass, with nothing
+    on disk recording the fill: a crash anywhere in it lost the credit for good (the fill is
+    never seen again) and the next official settlement classified the filled WAIT on its
+    price path, MISSED_WINNER beside a policy that had counted GOOD_WAIT. Now a WAIT whose
+    horizon covers the fill (LIVE) or cannot be verified yet (UNVERIFIABLE, QT-07) is marked
+    first, and every credit is made from a marker (retry_pending_good_waits), which every
+    official settlement runs before any price path. The earliest fill is kept.
     """
     with locked_ledger(ledger_path()) as (ledger, rows, _):
         changed = 0
@@ -703,7 +707,7 @@ def _queue_unverified_fills(symbol: str, entry_day: str) -> int:
                 continue
             if row.get("later_entry_pending"):
                 continue
-            if _wait_ordinal_state(row, entry_day) == "UNVERIFIABLE":
+            if _wait_ordinal_state(row, entry_day) in ("LIVE", "UNVERIFIABLE"):
                 row["later_entry_pending"] = {"fill_session": str(entry_day)[:10],
                                               "noted_at": datetime.now(timezone.utc).isoformat()}
                 changed += 1
@@ -713,27 +717,74 @@ def _queue_unverified_fills(symbol: str, entry_day: str) -> int:
         return changed
 
 
-def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = None,
-                             today: str | None = None) -> dict[str, Any]:
-    """Re-verify queued later fills; credit GOOD_WAIT only when the ordinal now verifies LIVE (QT-07).
+def _claimed_good_wait_units(path=None) -> dict[str, str]:
+    """{unit key: its verified fill} for every unit the GOOD_WAIT credit has claimed (CLAIMED or APPLIED).
 
-    EXPIRED drops the fill (the WAIT settles on its own price path); still
-    UNVERIFIABLE keeps it queued, until LATER_ENTRY_VERIFY_MAX_DAYS after the
-    fill, then drops it as unverifiable. Never fabricates a session.
+    Such a unit's credit was decided when it was claimed; a ledger row of it that is still
+    unclassified is a credit a crash cut short, including one cut short before fills were
+    marked (lifecycle audit F1). It is finished with the unit's own fill, never re-decided.
+    """
+    from product import learning_observations as LO
+    from product.learning_policy_store import policy_path
+
+    units: dict[str, str] = {}
+    for unit in LO.scope_payloads(LO.ledger_path_for(policy_path(path)), "COUNTERFACTUAL", contains=GOOD_WAIT):
+        body = unit.get("payload")
+        settled = body.get("settled") if isinstance(body, dict) else None
+        if not isinstance(settled, dict) or str(settled.get("classification") or "") != GOOD_WAIT:
+            continue
+        fill = str(settled.get("later_entry_verified") or "")[:10]
+        keyed = counterfactual_observation_key(settled)
+        if len(fill) == 10 and keyed is not None and keyed[0] == unit["observation_key"]:
+            units[keyed[0]] = fill
+    return units
+
+
+def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = None,
+                             today: str | None = None, symbols=None) -> dict[str, Any]:
+    """Credit queued later fills; GOOD_WAIT only when the ordinal verifies LIVE (QT-07).
+
+    Every GOOD_WAIT credit is made here, from a durable marker (_queue_later_fills), so a
+    crash at any point leaves a marker this retries (lifecycle audit F1). EXPIRED drops
+    the fill (the WAIT settles on its own price path); still UNVERIFIABLE keeps it queued,
+    until LATER_ENTRY_VERIFY_MAX_DAYS after the fill, then drops it as unverifiable. A row
+    of a unit the credit already claimed is finished with that unit's own fill. Never
+    fabricates a session. ``symbols`` limits the pass to those symbols.
     """
     from datetime import date
+    wanted = None if symbols is None else {str(s).upper() for s in symbols}
     with locked_ledger(ledger_path()) as (ledger, rows, _):
         now = str(today or datetime.now(timezone.utc).date().isoformat())[:10]
         out = {"credited": 0, "expired": 0, "still_unverifiable": 0, "dropped_unverifiable": 0}
+        open_waits = [r for r in rows if not r.get("classification")
+                      and (wanted is None or str(r.get("symbol") or "").upper() in wanted)]
+        claimed = _claimed_good_wait_units(path) if open_waits else {}
         rewritten: list[dict[str, Any]] = []
         changed = False
+        credited: dict[str, str] = {}          # unit key -> fill, for the units credited in this pass
+        siblings: list[int] = []               # unmarked copies of a unit; finished after the sweep
         for row in rows:
-            pending = row.get("later_entry_pending")
-            if row.get("classification") or not isinstance(pending, Mapping):
+            if row.get("classification") or (wanted is not None
+                                             and str(row.get("symbol") or "").upper() not in wanted):
                 rewritten.append(row)
                 continue
-            fill = str(pending.get("fill_session") or "")[:10]
-            state = _wait_ordinal_state(row, fill)
+            keyed = counterfactual_observation_key(row)
+            is_wait = str(row.get("decision") or "").upper() == "WAIT"
+            adopted = claimed.get(keyed[0]) if keyed is not None and is_wait else None
+            pending = row.get("later_entry_pending")
+            if not isinstance(pending, Mapping):
+                if not adopted:
+                    if keyed is not None and is_wait:
+                        siblings.append(len(rewritten))
+                    rewritten.append(row)
+                    continue
+                # A credit claimed before its fill was marked: persist the marker so no
+                # price path can settle the row while the credit is finished.
+                pending = {"fill_session": adopted, "recovered_from": "observation_unit"}
+                row = {**row, "later_entry_pending": pending}
+                changed = True
+            fill = adopted or str(pending.get("fill_session") or "")[:10]
+            state = "LIVE" if adopted else _wait_ordinal_state(row, fill)
             if state == "LIVE":
                 settled = settle({k: v for k, v in row.items() if k != "later_entry_pending"},
                                  forward_return_pct=None, later_entered=True)
@@ -748,6 +799,8 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
                     continue
                 rewritten.append(settled)
                 out["credited"] += 1
+                if keyed is not None:
+                    credited.setdefault(keyed[0], fill)
                 changed = True
                 continue
             if state == "UNVERIFIABLE":
@@ -765,6 +818,25 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
             kept = {k: v for k, v in row.items() if k != "later_entry_pending"}
             kept["later_entry_unverified" if state == "UNVERIFIABLE" else "later_entry_expired"] = fill
             rewritten.append(kept)
+            changed = True
+        # Another copy of a unit credited in this sweep (one cycle's re-freeze of the same
+        # day, symbol and reason) carries the unit's label, never a price-path one beside it.
+        for i in siblings:
+            row = rewritten[i]
+            keyed = counterfactual_observation_key(row)
+            fill = credited.get(keyed[0]) if keyed is not None else None
+            if not fill:
+                continue
+            settled = settle(row, forward_return_pct=None, later_entered=True)
+            settled["later_entry_verified"] = fill
+            try:
+                ingest_counterfactual(settled, path=path, floors=floors)    # the unit is applied: a no-op
+            except Exception as exc:
+                out.setdefault("errors", []).append(f"{row.get('symbol')}: {type(exc).__name__}: {exc}"[:200])
+                rewritten[i] = {**row, "later_entry_pending": {"fill_session": fill,
+                                                               "recovered_from": "observation_unit"}}
+            else:
+                rewritten[i] = settled
             changed = True
         if changed:
             from core.atomic_io import atomic_write_text
@@ -813,17 +885,22 @@ def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None
 
     Only the symbol's pending WAIT decisions whose horizon still covers the
     entry day are credited; other pending rows keep waiting for their own
-    rulebook outcome.
+    rulebook outcome. The fill is marked durably first and credited from the
+    mark (lifecycle audit F1): a crash leaves it to the next settlement.
     """
     entry_day = str(as_of or datetime.now(timezone.utc).date().isoformat())[:10]
-    _queue_unverified_fills(str(symbol).upper(), entry_day)
-    return settle_pending_counterfactuals(
-        later_entered={str(symbol).upper(): True},
-        path=path,
-        floors=floors,
-        row_filter=lambda row: _wait_is_live(row, entry_day),
-        verified_fill=entry_day,
-    )
+    symbol = str(symbol).upper()
+    queued = _queue_later_fills(symbol, entry_day)
+    out = retry_pending_good_waits(path=path, floors=floors, today=entry_day, symbols={symbol})
+    credited = int(out.get("credited") or 0)
+    result: dict[str, Any] = {"updated": credited, "classifications": {GOOD_WAIT: credited} if credited else {},
+                              "queued": queued}
+    if out.get("errors"):
+        result["errors"] = list(out["errors"])
+        from product.counterfactual_learning import note_recording_failure
+        note_recording_failure("later-entry credit (kept queued; the next settlement retries it)", symbol,
+                               RuntimeError("; ".join(out["errors"])))
+    return result
 
 
 def settle_pending_counterfactuals(
@@ -847,8 +924,14 @@ def settle_pending_counterfactuals(
         updated = 0
         classifications: dict[str, int] = {}
         rewritten: list[dict[str, Any]] = []
+        queued_units = {keyed[0] for r in rows if r.get("later_entry_pending") and not r.get("classification")
+                        for keyed in [counterfactual_observation_key(r)] if keyed is not None}
         for row in rows:
-            if row.get("classification"):
+            keyed = counterfactual_observation_key(row)
+            if (row.get("classification") or row.get("later_entry_pending")
+                    or (keyed is not None and keyed[0] in queued_units)):
+                # A queued later fill is credited by retry_pending_good_waits only; a
+                # price outcome here would erase the GOOD_WAIT it may have earned (QT-07).
                 rewritten.append(row)
                 continue
             symbol = str(row.get("symbol") or "").upper()

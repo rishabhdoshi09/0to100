@@ -620,18 +620,31 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
         good_waits = retry_pending_good_waits(today=as_of)     # aged against the settled session
     except Exception as exc:
         good_waits = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+    from product.paper_learning_loop import counterfactual_observation_key
+    # The GOOD_WAIT recovery could not run: a WAIT whose credit it would have finished
+    # must not be priced beside it, so no WAIT is priced this pass (lifecycle audit F1).
+    hold_waits = "error" in good_waits
     try:
         with locked_ledger() as (path, rows, _):
+            queued_units = {keyed[0] for r in rows if r.get("later_entry_pending") and not r.get("classification")
+                            for keyed in [counterfactual_observation_key(r)] if keyed is not None}
             rewritten = []
             for row in rows:
                 if row.get("classification") or row.get("outcome"):
                     rewritten.append(row)
                     continue
-                if row.get("later_entry_pending"):
-                    # Its fill is still being verified: settling it on price now
-                    # would erase a GOOD_WAIT it may have earned (QT-07).
+                keyed = counterfactual_observation_key(row)
+                if row.get("later_entry_pending") or (keyed is not None and keyed[0] in queued_units):
+                    # Its fill (or a fill of another copy of its unit) is still being
+                    # verified: settling it on price now would erase a GOOD_WAIT it may
+                    # have earned (QT-07, lifecycle audit F1).
                     pending.append({"symbol": row.get("symbol"), "as_of": row.get("as_of"),
                                     "reason": "LATER_ENTRY_UNVERIFIED"})
+                    rewritten.append(row)
+                    continue
+                if hold_waits and str(row.get("decision") or "").upper() == "WAIT":
+                    pending.append({"symbol": row.get("symbol"), "as_of": row.get("as_of"),
+                                    "reason": "GOOD_WAIT_RECOVERY_UNAVAILABLE"})
                     rewritten.append(row)
                     continue
                 symbol = str(row.get("symbol") or "")

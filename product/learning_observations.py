@@ -248,6 +248,38 @@ def claimed_unapplied(path: str | Path) -> list[dict[str, Any]]:
     return out
 
 
+def scope_payloads(path: str | Path, scope: str, *, states: tuple[str, ...] = (CLAIMED, APPLIED),
+                   contains: str = "") -> list[dict[str, Any]]:
+    """Units of ``scope`` in ``states`` that carry a payload (optionally one containing ``contains``).
+
+    One read: observation_key, state and the parsed payload (None when it is not JSON).
+    """
+    target = Path(path)
+    if not target.exists() or not states:
+        return []
+    marks = ",".join("?" * len(states))
+    sql = (f"SELECT observation_key, state, payload FROM observations "
+           f"WHERE scope=? AND state IN ({marks}) AND payload != ''")
+    args: list[Any] = [str(scope), *states]
+    if contains:
+        sql += " AND instr(payload, ?) > 0"
+        args.append(str(contains))
+    with _LOCK:
+        conn = _connect(target)
+        try:
+            rows = conn.execute(sql, args).fetchall()
+        finally:
+            conn.close()
+    out = []
+    for key, state, payload in rows:
+        try:
+            body = json.loads(payload)
+        except ValueError:
+            body = None
+        out.append({"observation_key": key, "state": state, "payload": body})
+    return out
+
+
 # ── outbox: the durable settlement → learning hand-off ────────────────────────
 
 def enqueue_event(path: str | Path, event_id: str, kind: str, payload: Mapping[str, Any]) -> bool:
