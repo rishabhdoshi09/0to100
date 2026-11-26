@@ -50,9 +50,33 @@ def ingested_path() -> Path:
 
 
 def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
+    """Append one record durably (taken-trade evidence, which a later close joins back to).
+
+    Synced before return (cycle 10: a plain append could vanish in a power cut while the
+    durably saved paper position survived, leaving its close with no taken evidence). A
+    file that ends without a newline (a torn append) gets one first, so this record is
+    never fused onto the torn line and lost with it; the readers skip the torn line.
+    """
+    import os
+
+    from core.atomic_io import durable_sync
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(dict(row), default=str) + "\n")
+    line = (json.dumps(dict(row), default=str) + "\n").encode("utf-8")
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        size = os.fstat(fd).st_size
+        if size:
+            with open(path, "rb") as fh:
+                fh.seek(size - 1)
+                if fh.read(1) != b"\n":
+                    line = b"\n" + line
+        view, written = memoryview(line), 0
+        while written < len(line):
+            written += os.write(fd, view[written:])
+        durable_sync(fd)
+    finally:
+        os.close(fd)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
