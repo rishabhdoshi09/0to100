@@ -1993,6 +1993,13 @@ class Supervisor:
             self.heartbeat()
             return None
         self.enqueue_due(current)
+        if self._stop:
+            # A stop (a SIGTERM is a cooperative stop) arrived while this tick prepared:
+            # lease nothing new. Started now, a long job would be SIGKILLed mid-run after the
+            # host's grace, and an interrupted paper cycle is retired as failed on restart.
+            # The job stays pending for the next owner (cycle-9 item 2).
+            self.heartbeat()
+            return None
         job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
         self._check_overdue()
         if job is None:
