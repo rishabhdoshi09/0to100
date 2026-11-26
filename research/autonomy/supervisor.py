@@ -936,6 +936,7 @@ class Supervisor:
         # supervisor automatically authorizes paper/history simulation.
         self._ensure_startup_trade_discovery()
         self._ensure_scan_matches_snapshot()
+        self._ensure_closed_market_auth(now_ist)
 
         # Closed market: keep official completed-session data current once the
         # exchange publication window opens. These jobs never auto-chain a scan.
@@ -1611,6 +1612,33 @@ class Supervisor:
         if self.jobs.clock() - since < self.AUTH_RETRY_S:
             return False
         self.jobs.requeue(job.job_id)
+        return True
+
+    #: A job that started waiting on AUTH_READY this recently gets a closed-market auth probe.
+    CLOSED_MARKET_AUTH_LOOKBACK_S = 36 * 3600
+
+    def _ensure_closed_market_auth(self, now_ist) -> bool:
+        """Schedule the day's AUTH_HEALTH probe when the market is closed and a recent job waits
+        on AUTH_READY (cycle 11).
+
+        Only the open-market branch scheduled that probe, so a login after the close (or after a
+        session the host missed) never released the EOD Kite refresh or the index warm-up until
+        the next session opened (owner's Mac 26 Nov: logged in 19:30 IST, both stayed BLOCKED and
+        the index store stayed at 23 Nov). The probe is the day's idempotent ``auth:<day>`` job,
+        so the existing revival rules bound its retries; its success releases the dependency.
+        """
+        try:
+            cutoff = self.jobs.clock() - self.CLOSED_MARKET_AUTH_LOOKBACK_S
+            waiting = [job for job in self.jobs.list(status=JS.BLOCKED, limit=500)
+                       if str(job.blocked_on or "") == JOBS.DEP_AUTH
+                       and float(job.blocked_at or 0.0) >= cutoff]
+        except Exception:
+            return False
+        if not waiting:
+            return False
+        day = now_ist.date().isoformat()
+        self._revive_blocked_auth(day)
+        self.jobs.enqueue(SCH.AUTH_HEALTH, idempotency_key=f"auth:{day}", critical=True)
         return True
 
     def _paper_for_snapshot(
