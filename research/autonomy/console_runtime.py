@@ -448,13 +448,17 @@ def run_visible_loop(
         supervisor._execute = original_execute
         runtime_stop.set()
         runtime_thread.join(timeout=RUNTIME_JOIN_DEADLINE_S)   # never longer than this (C8.7-03)
-        try:
-            _write_runtime_status(
-                supervisor,
-                process_running=False,
-                active_job=active_snapshot(),
-            )
-        except Exception:
-            pass
+
+        def _final_status() -> None:
+            try:
+                _write_runtime_status(supervisor, process_running=False, active_job=active_snapshot())
+            except Exception:
+                pass
+
+        # The 'stopped' status is best effort, off the shutdown path: a stalled disk write here
+        # must not keep the caller from sup.shutdown() past the host's grace (GPT C10-04).
+        final = threading.Thread(target=_final_status, name="quantterm-runtime-final", daemon=True)
+        final.start()
+        final.join(timeout=RUNTIME_JOIN_DEADLINE_S)
         with _HEARTBEAT_CONSOLE_LOCK:
             _HEARTBEAT_CONSOLE_STATE.pop(id(supervisor), None)

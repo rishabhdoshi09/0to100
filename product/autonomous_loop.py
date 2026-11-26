@@ -1181,6 +1181,8 @@ def _live_broker(persisted: Any) -> dict[str, Any]:
 
 #: A persisted loop summary older than this is never presented as current (cycle 11).
 LOOP_SUMMARY_STALE_AFTER_S = 24 * 3600
+#: Tolerated clock skew for a summary dated slightly ahead of this host's clock.
+LOOP_SUMMARY_CLOCK_SKEW_S = 300
 
 
 def _summary_age(summary: Mapping[str, Any]) -> dict[str, Any]:
@@ -1189,10 +1191,15 @@ def _summary_age(summary: Mapping[str, Any]) -> dict[str, Any]:
     try:
         made = datetime.fromisoformat(raw)
         made = made if made.tzinfo else made.replace(tzinfo=timezone.utc)
-        age_s = max(0.0, (datetime.now(timezone.utc) - made).total_seconds())
+        age_s = (datetime.now(timezone.utc) - made).total_seconds()
     except ValueError:
         return {"generated_at": None, "age_hours": None, "stale": True,
                 "note": "The loop summary carries no time: it is treated as stale."}
+    if age_s < -LOOP_SUMMARY_CLOCK_SKEW_S:
+        # Dated ahead of this clock (a clock that moved back): its time proves nothing (GPT C11-04).
+        return {"generated_at": raw, "age_hours": round(age_s / 3600.0, 1), "stale": True,
+                "note": "The loop summary is dated ahead of this host's clock: it is treated as stale."}
+    age_s = max(0.0, age_s)
     stale = age_s > LOOP_SUMMARY_STALE_AFTER_S
     return {"generated_at": raw, "age_hours": round(age_s / 3600.0, 1), "stale": stale,
             "note": (f"The product loop last ran {age_s / 86400.0:.1f} day(s) ago; its sections show that run, "
@@ -1203,16 +1210,15 @@ def _current_readiness(persisted: Mapping[str, Any] | None, broker: Mapping[str,
                        loop: Mapping[str, Any]) -> dict[str, Any]:
     """The readiness block with the LIVE broker: a capability the live check denies is never claimed,
     and a block from a stale summary is labelled with its time (cycle 11)."""
-    if not persisted:
-        readiness = dict(RDY.inspect_readiness())
-    else:
-        readiness = dict(persisted)
-        caps = dict(readiness.get("capabilities") or {})
-        caps["BROKER_LIVE_DATA_READY"] = bool(broker.get("live_data_ready"))
-        caps["EXECUTION_READY"] = bool(broker.get("execution_ready"))
-        readiness["capabilities"] = caps
-        if loop.get("stale"):
-            readiness.update(stale=True, as_of=loop.get("generated_at"))
+    readiness = dict(RDY.inspect_readiness()) if not persisted else dict(persisted)
+    # ONE broker observation for the block, the operator state and the capabilities: the
+    # cold path's inspect_readiness() probes the broker again and could disagree (GPT C11-03).
+    caps = dict(readiness.get("capabilities") or {})
+    caps["BROKER_LIVE_DATA_READY"] = bool(broker.get("live_data_ready"))
+    caps["EXECUTION_READY"] = bool(broker.get("execution_ready"))
+    readiness["capabilities"] = caps
+    if persisted and loop.get("stale"):
+        readiness.update(stale=True, as_of=loop.get("generated_at"))
     readiness["broker"] = dict(broker)
     return readiness
 

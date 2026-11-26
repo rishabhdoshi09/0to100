@@ -88,3 +88,26 @@ def test_a_fresh_summary_is_served_as_before_with_the_live_broker(desk):
     assert out["readiness"]["capabilities"]["OFFICIAL_MARKET_DATA_READY"] is True
     assert sorted(calls) == ["list_candidates", "state_counts"]
     assert out["candidate_lifecycle"] == {"WAIT": 1}
+
+
+# ── GPT review of cycle 11 (C11-03, C11-04) ──
+
+def test_C11_03_a_cold_desk_uses_one_broker_observation(desk, monkeypatch):
+    states = iter([
+        {"state": "LOGIN_REQUIRED", "live_data_ready": False, "execution_ready": False},
+        {"state": "READY", "live_data_ready": True, "execution_ready": True},
+    ])
+    monkeypatch.setattr(AL.RDY, "broker_status", lambda: next(states))
+    monkeypatch.setattr(AL.RDY, "official_history", lambda: {})
+    monkeypatch.setattr("product.scan_store.load_scan", lambda *a, **k: {})
+    out, _ = desk({})
+    rd = out["readiness"]
+    assert rd["broker"] == out["what_needs_the_operator"]
+    assert rd["capabilities"]["EXECUTION_READY"] == rd["broker"]["execution_ready"]
+    assert rd["capabilities"]["BROKER_LIVE_DATA_READY"] == rd["broker"]["live_data_ready"]
+
+
+def test_C11_04_a_summary_dated_ahead_of_the_clock_is_stale(desk):
+    out, calls = desk(_summary(-timedelta(days=2)))
+    assert out["loop_summary"]["stale"] is True and calls == []
+    assert out["loop_summary"]["note"]

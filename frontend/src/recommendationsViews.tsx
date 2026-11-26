@@ -1440,8 +1440,8 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
                     {idx.name}
                     {idx.chg_pct != null ? ` ${idx.chg_pct >= 0 ? '▲' : '▼'} ${idx.chg_pct.toFixed(2)}%` : ''}
                     {idx.price != null ? ` at ${money(idx.price, 0)}` : ''}
-                    {idx.as_of ? ` · session ${idx.as_of}` : ''}
-                    {idx.stale ? ' · stale' : ''}
+                    {idx.as_of ? ` · session ${idx.as_of}` : ' · session unknown'}
+                    {idx.stale === true ? ' · stale' : idx.stale === false ? '' : ' · freshness unknown'}
                   </li>
                 ))}
               </ul>

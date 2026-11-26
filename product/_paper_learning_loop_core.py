@@ -57,20 +57,22 @@ def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     file that ends without a newline (a torn append) gets one first, so this record is
     never fused onto the torn line and lost with it; the readers skip the torn line.
     """
+    import fcntl
     import os
 
     from core.atomic_io import durable_sync
 
     path.parent.mkdir(parents=True, exist_ok=True)
     line = (json.dumps(dict(row), default=str) + "\n").encode("utf-8")
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
     try:
+        # One writer at a time, from the tail check through the sync, on THIS descriptor
+        # (threads and processes alike): a concurrent append can never land inside a
+        # record cut by a short write (GPT C10-02). Closing the descriptor releases it.
+        fcntl.flock(fd, fcntl.LOCK_EX)
         size = os.fstat(fd).st_size
-        if size:
-            with open(path, "rb") as fh:
-                fh.seek(size - 1)
-                if fh.read(1) != b"\n":
-                    line = b"\n" + line
+        if size and os.pread(fd, 1, size - 1) != b"\n":
+            line = b"\n" + line
         view, written = memoryview(line), 0
         while written < len(line):
             written += os.write(fd, view[written:])

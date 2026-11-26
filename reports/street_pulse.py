@@ -67,13 +67,31 @@ def _ts_is_ist_today(ts: Any) -> bool:
         return False
 
 
-def _expected_session() -> str | None:
-    """The latest completed NSE session the calendar expects now; None when it cannot say."""
+def completed_session(now=None) -> str | None:
+    """The latest NSE session whose regular close (15:30 IST) has passed; None when the
+    calendar cannot say. A completed-session tile is judged against this, not against the
+    18:00 publication cutoff the archive uses (GPT C11-02: between 15:30 and 18:00 the
+    previous session's tile read as current)."""
     try:
-        from data.bhavcopy_runtime import expected_latest_completed_session
-        return expected_latest_completed_session().isoformat()
+        from research.intelligence.data import nse_calendar as C
+
+        clock = now or C._now_ist()
+        holidays = C.load_holidays()
+        day = clock.date()
+        if C.is_session(day, holidays) and (clock.hour, clock.minute) >= C._CLOSE_HM:
+            return day.isoformat()
+        return C.previous_session(day, holidays).isoformat()
     except Exception:
         return None
+
+
+def tile_freshness(as_of: str | None, now=None) -> bool | None:
+    """stale: True when the tile has no session or one before the latest completed session;
+    None when the calendar cannot say (unknown, never fresh)."""
+    if not as_of:
+        return True
+    expected = completed_session(now)
+    return None if expected is None else str(as_of)[:10] < expected
 
 
 def _market_snapshot() -> dict:
@@ -88,12 +106,11 @@ def _market_snapshot() -> dict:
     out: dict = {"indices": [], "commentary": ""}
     try:
         from data.index_store import latest_index_print
-        expected = _expected_session()
         for name, ticker in (("NIFTY 50", "^NSEI"), ("BANK NIFTY", "^NSEBANK")):
             q = latest_index_print(ticker) or {}
             if q.get("price"):
                 as_of = str(q.get("as_of") or "")[:10] or None
-                stale = True if not as_of else (None if expected is None else as_of < expected)
+                stale = tile_freshness(as_of)
                 out["indices"].append({
                     "name": name,
                     "price": q["price"],
@@ -345,9 +362,12 @@ def build_pulse(*, force: bool = False) -> dict:
     takeaways = []
     for idx in snapshot["indices"]:
         arrow = "▲" if idx["chg_pct"] >= 0 else "▼"
+        when = f" (session {idx['as_of']}" + (", stale)" if idx.get("stale") else
+                                               ", freshness unknown)" if idx.get("stale") is None else ")") \
+            if idx.get("as_of") else " (session unknown)"
         takeaways.append(
             f"{idx['name']} {arrow} {idx['chg_pct']:+.2f}% "
-            f"at {idx['price']:,.0f}"
+            f"at {idx['price']:,.0f}{when}"
         )
     if gainers:
         takeaways.append(

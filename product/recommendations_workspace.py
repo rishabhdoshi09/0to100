@@ -1337,10 +1337,22 @@ def _report_item(data: Mapping[str, Any], *, path: str = "", today: str = "") ->
     for idx in snapshot.get("indices") or []:
         if not isinstance(idx, Mapping):
             continue
+        as_of = str(idx.get("as_of") or "")[:10] or None
+        try:
+            from reports.street_pulse import tile_freshness
+            stale = tile_freshness(as_of) if as_of else None     # re-judged when served (C11-02)
+        except Exception:
+            stale = None
         indices.append({
             "name": str(idx.get("name") or ""),
             "price": idx.get("price"),
             "chg_pct": idx.get("chg_pct"),
+            # A saved report from before the tiles were dated has no session: unknown,
+            # never presented as the latest one (GPT C11-01).
+            "as_of": as_of,
+            "source": str(idx.get("source") or ""),
+            "basis": str(idx.get("basis") or ""),
+            "stale": stale,
         })
     return {
         "id": str(data.get("id") or f"market_pulse_{day}"),

@@ -63,3 +63,30 @@ def test_the_exit_deadline_is_well_inside_the_host_grace():
     from product.host_supervisor import STOP_GRACE_S
 
     assert CR.RUNTIME_JOIN_DEADLINE_S <= STOP_GRACE_S / 4
+
+
+def test_C10_04_a_stalled_final_status_write_cannot_delay_shutdown(tmp_path, monkeypatch):
+    """GPT C10-04: after the heartbeat thread stops, the loop writes the 'stopped' status itself,
+    synchronously, before returning to sup.shutdown(). A stall there outlasted the grace too."""
+    stalled, resume = threading.Event(), threading.Event()
+    real_write = CR._write_runtime_status
+
+    def write(supervisor, *, process_running, **kw):
+        if not process_running:
+            stalled.set()
+            resume.wait(10.0)                        # the USB disk stalls the final write
+        return real_write(supervisor, process_running=process_running, **kw)
+
+    monkeypatch.setattr(CR, "_write_runtime_status", write)
+    stop_at = threading.Event()
+    stop_at.set()
+    sup = _StopAfter(tmp_path / "auto", stop_at)
+    assert sup.start()
+    try:
+        t = time.monotonic()
+        CR.run_visible_loop(sup, interval_s=0, heartbeat_s=12.0)
+        took = time.monotonic() - t
+        assert stalled.is_set() and took < 3.5      # returned to its caller (sup.shutdown) in time
+    finally:
+        resume.set()
+        sup.shutdown()
