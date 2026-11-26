@@ -239,23 +239,45 @@ def test_a_rolled_back_attempt_can_be_re_planned_and_keeps_its_history(f1):
 
 
 def test_an_apply_during_a_re_plan_is_never_overwritten(f1, monkeypatch):
+    """Cycle 9 (item 1): the re-plan holds the manifest's lock, so the apply is refused
+    outright and never runs; the target is untouched and the plan publishes."""
     db, manifest = f1
     plan_f1(db, manifest)
     quiet_copy = repair._quiet_copy
-    applied = {}
+    refused = []
 
     def copy_then_apply(src, dst):
         copied = quiet_copy(src, dst)
-        if not applied:
-            applied.update(repair.apply(manifest, "test", target_is_copy=True))
+        if not refused:
+            with pytest.raises(SystemExit, match="in use by plan") as exc:
+                repair.apply(manifest, "test", target_is_copy=True)
+            refused.append(str(exc.value))
         return copied
 
     monkeypatch.setattr(repair, "_quiet_copy", copy_then_apply)
+    m = repair.plan(db, manifest.parent / "stage2", manifest)
+    monkeypatch.undo()
+    assert refused and m["state"] == "planned" and "backup" not in json.loads(manifest.read_text())
+    assert repair.check(db, manifest.parent / "stage3")["stale_total"] == 4       # never repaired
+
+
+def test_a_writer_outside_the_tool_during_a_re_plan_is_never_overwritten(f1, monkeypatch):
+    """The publication re-check (GPT C8.7-04) still catches a writer the lock cannot see: an
+    edit, a restore, an older version of the tool."""
+    db, manifest = f1
+    plan_f1(db, manifest)
+    quiet_copy = repair._quiet_copy
+    edited = json.dumps({**json.loads(manifest.read_text()), "note": "edited by hand"})
+
+    def copy_then_edit(src, dst):
+        copied = quiet_copy(src, dst)
+        manifest.write_text(edited)
+        return copied
+
+    monkeypatch.setattr(repair, "_quiet_copy", copy_then_edit)
     with pytest.raises(SystemExit, match="changed while the plan was made"):
         repair.plan(db, manifest.parent / "stage2", manifest)
-    monkeypatch.undo()
-    assert json.loads(manifest.read_text())["backup"] == applied["backup"]
-    assert repair.rollback(manifest, target_is_copy=True)["state"] == "rolled_back"
+    assert manifest.read_text() == edited
 
 
 _NO_CTYPES = r"""

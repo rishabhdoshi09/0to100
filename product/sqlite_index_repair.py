@@ -68,6 +68,7 @@ copy mode is never honoured under /Volumes (any spelling: core.live_volume).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -517,11 +518,13 @@ def _check_staging(entry: Path, staging: Path) -> None:
         raise SystemExit(f"refusing: staging must not be in the database's directory ({entry.parent})")
 
 
-def _check_outputs(entry: Path, staging: Path, out: Path) -> dict[str, Any] | None:
+def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
     """Outputs live on a disk the operator owns, never in the database's directory.
 
     Compared by FILESYSTEM IDENTITY up the resolved path, so a symlinked staging
     directory or a differently cased spelling cannot reach it (GPT F1-04, V2-04).
+    Placement only: the manifest already at ``out`` is read under its lock
+    (_replaceable_prior), so no file is created before these refusals ran.
     """
     _no_dotdot(staging, "staging")
     _no_dotdot(out, "the manifest")
@@ -537,6 +540,12 @@ def _check_outputs(entry: Path, staging: Path, out: Path) -> dict[str, Any] | No
         chain = _existing_chain(Path(p) if what == "staging" else Path(p).parent)
         if any(_identity(c) == target_dir for c in chain):
             raise SystemExit(f"refusing: {what} must not be in the database's directory ({entry.parent})")
+
+
+def _replaceable_prior(out: Path) -> dict[str, Any] | None:
+    """The manifest at ``out`` if a new plan may replace it (None when there is none). Read
+    under the manifest's lock, so no apply or rollback can write it between this read and the
+    plan's publication (GPT cycle-9 item 1)."""
     prior = _prior_manifest(out)
     if prior is not None:
         state = prior.get("state")
@@ -564,8 +573,10 @@ def _prior_manifest(out: Path) -> dict[str, Any] | None:
 
 def _publish_plan(out: Path, m: dict[str, Any], prior: dict[str, Any] | None) -> None:
     """Write the plan only if nothing wrote ``out`` while it was made: an apply that published
-    its record in the meantime must never be overwritten (GPT C8.7-04). The remaining window,
-    this check to the rename, needs two commands on the same manifest at once."""
+    its record in the meantime must never be overwritten (GPT C8.7-04). Every command of this
+    tool now holds the manifest's lock from its first read to its last write, which closes the
+    check-to-rename window between two commands (cycle-9 item 1); this re-check still catches
+    a writer outside the tool (an edit, a restore, an older version)."""
     if _prior_manifest(out) != prior:
         raise SystemExit(f"refusing: {out} changed while the plan was made (another command wrote it); "
                          "inspect it, then plan to a new --out")
@@ -599,16 +610,115 @@ def _check_manifest_place(real: Path, target: Path) -> None:
         raise SystemExit(f"refusing: the manifest must not be in the database's directory ({target.parent})")
 
 
+#: Manifest locks this process holds: real manifest path -> (descriptor, lock identity, lock path).
+_HELD: dict[str, tuple[int, tuple[int, int], Path]] = {}
+
+
+def _lock_path(real: Path) -> Path:
+    """The manifest's lock: a plain file BESIDE it, never replaced and never deleted, so its
+    identity does not change when the manifest's inode is replaced by each write. Named after
+    the CASE-FOLDED manifest name inside the manifest's physical directory, so every spelling
+    of one manifest (a symlinked or firmlinked directory, a different case on a
+    case-insensitive volume) meets the same lock."""
+    return real.parent / f".{real.name.casefold()}.{TOOL}.lock"
+
+
+def _check_single_link(real: Path) -> None:
+    """A hard-linked manifest has a second name this lock does not cover: refused. (A name
+    swapped to a SYMLINK is not followed: the write replaces the entry, GPT C8-03.)"""
+    try:
+        st = os.lstat(real)
+    except FileNotFoundError:
+        return
+    if S.S_ISREG(st.st_mode) and st.st_nlink != 1:
+        raise SystemExit(f"refusing: the manifest {real} has {st.st_nlink} hard links; an alias could be "
+                         "written without its lock")
+
+
+@contextlib.contextmanager
+def _manifest_lock(real: Path, command: str):
+    """Exclusive, non-blocking lock on one manifest for a whole plan / apply / rollback.
+
+    Serializes every writer of the manifest (cycle-9 item 1): the plan's check-to-rename
+    window, two applies, an apply beside a rollback. Fails closed: a held lock refuses at
+    once (the other command is named), never waits. The kernel releases it when its holder
+    exits or dies, so a retry after a crash proceeds. Lock order is always this lock first,
+    then SQLite's exclusive lock on the target.
+    """
+    import fcntl
+
+    real = Path(real)
+    if os.path.realpath(real.parent) != str(real.parent):
+        raise SystemExit(f"refusing: the manifest's directory {real.parent} is not its real path (a symlink?)")
+    lock = _lock_path(real)
+    try:
+        fd = os.open(str(lock), os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600)
+    except OSError as exc:
+        raise SystemExit(f"refusing: the manifest lock {lock} cannot be opened as a plain file ({exc})") from None
+    try:
+        st = os.fstat(fd)
+        if not S.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise SystemExit(f"refusing: the manifest lock {lock} is not a plain file with one link")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = os.pread(fd, 200, 0).decode("utf-8", "replace").strip() or "another command"
+            raise SystemExit(f"refusing: {real.name} is in use by {holder}; wait for it to finish, then "
+                             "re-run (one plan/apply/rollback per manifest at a time)") from None
+        except OSError as exc:
+            raise SystemExit(f"refusing: the manifest lock {lock} cannot be taken ({exc})") from None
+        named = os.lstat(lock)
+        if (named.st_dev, named.st_ino) != (st.st_dev, st.st_ino):
+            raise SystemExit(f"refusing: the manifest lock {lock} was replaced while it was taken")
+        _check_single_link(real)
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, f"{command} (pid {os.getpid()})\n".encode(), 0)
+        _HELD[str(real)] = (fd, (st.st_dev, st.st_ino), lock)
+        try:
+            yield
+        finally:
+            _HELD.pop(str(real), None)
+    finally:
+        os.close(fd)                                   # releases the lock
+
+
+@contextlib.contextmanager
+def _locked_record(real: Path, command: str):
+    """apply / rollback: the manifest's place is checked against the target it names BEFORE
+    the lock file is created (never beside the database), then the lock is taken; the caller
+    re-reads the manifest under it."""
+    peek = _load(real)
+    _check_manifest_place(real, _entry(Path(peek["target"])))
+    with _manifest_lock(real, command):
+        yield
+
+
+def _require_lock(path: Path) -> None:
+    """Every manifest write is made under that manifest's lock, still held by its file."""
+    held = _HELD.get(str(path))
+    if held is None:
+        raise SystemExit(f"refusing: {path.name} would be written without its lock")
+    _fd, identity, lock = held
+    try:
+        named = os.lstat(lock)
+    except OSError:
+        named = None
+    if named is None or (named.st_dev, named.st_ino) != identity:
+        raise SystemExit(f"refusing: the manifest lock {lock} was removed or replaced while it was held")
+
+
 def _write_manifest(path: Path, m: dict[str, Any]) -> None:
     """Durable manifest write through an EXCLUSIVELY created, no-follow temp file.
 
     The shared writer opened a predictable ``<name>.tmp-<pid>`` with ``"w"``: a
     symlink placed there truncated whatever it pointed at, the database included
     (GPT V2-04). ``os.replace`` then swaps the directory entry, never its target.
+    Only under the manifest's lock (cycle-9 item 1).
     """
     path = Path(path)
     if os.path.realpath(path.parent) != str(path.parent):
         raise SystemExit(f"refusing: the manifest's directory {path.parent} is not its real path (a symlink?)")
+    _require_lock(path)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
     try:
@@ -687,9 +797,15 @@ def check(target: str | Path, staging: str | Path) -> dict[str, Any]:
 def plan(target: str | Path, staging: str | Path, out: str | Path, *, expect_stale: int | None = None) -> dict[str, Any]:
     entry = _check_target(Path(target))
     staging, out = Path(staging), Path(out)
-    prior = _check_outputs(entry, staging, out)
+    _check_outputs(entry, staging, out)
     out = _manifest_path(out)
     _check_manifest_place(out, entry)
+    with _manifest_lock(out, "plan"):
+        return _plan_locked(entry, staging, out, expect_stale)
+
+
+def _plan_locked(entry: Path, staging: Path, out: Path, expect_stale: int | None) -> dict[str, Any]:
+    prior = _replaceable_prior(out)
     staging = staging.resolve()
     plan_id = uuid.uuid4().hex
     work = staging / f"plan-{time.strftime('%Y%m%d_%H%M%S')}-{plan_id[:8]}"
@@ -926,7 +1042,12 @@ def _record_earlier_backups(m: dict[str, Any]) -> None:
 
 def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: bool = False) -> dict[str, Any]:
     manifest_path = _manifest_path(manifest_path)                  # resolved once, never again
-    m = _load(manifest_path)
+    with _locked_record(manifest_path, "apply"):
+        return _apply_locked(manifest_path, owner_approval, target_is_copy)
+
+
+def _apply_locked(manifest_path: Path, owner_approval: str, target_is_copy: bool) -> dict[str, Any]:
+    m = _load(manifest_path)                                       # re-read under the lock
     if not str(owner_approval or "").strip():
         raise SystemExit("refusing: apply needs the owner's approval in words (--owner-approval)")
     if m.get("state") not in {"planned", "applying", "applied", "rolled_back"}:
@@ -1054,7 +1175,13 @@ def _verified_rollback_source(backup: Path, target: Path, m: dict[str, Any]) -> 
 def rollback(manifest_path: str | Path, owner_approval: str = "", *, target_is_copy: bool = False,
              backup_path: str | Path | None = None) -> dict[str, Any]:
     manifest_path = _manifest_path(manifest_path)
-    m = _load(manifest_path)
+    with _locked_record(manifest_path, "rollback"):
+        return _rollback_locked(manifest_path, owner_approval, target_is_copy, backup_path)
+
+
+def _rollback_locked(manifest_path: Path, owner_approval: str, target_is_copy: bool,
+                     backup_path: str | Path | None) -> dict[str, Any]:
+    m = _load(manifest_path)                                       # re-read under the lock
     target = _entry(Path(m["target"]))
     live = not target_is_copy or _on_live_volume(target) or _on_live_volume(target.resolve())
     if live and not str(owner_approval or "").strip():
