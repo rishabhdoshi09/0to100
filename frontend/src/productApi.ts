@@ -1426,7 +1426,7 @@ export type MarketReportItem = {
   gainers?: MarketMover[]
   losers?: MarketMover[]
   snapshot?: {
-    indices?: Array<{ name: string; price?: number; chg_pct?: number }>
+    indices?: Array<{ name: string; price?: number; chg_pct?: number; as_of?: string | null; stale?: boolean | null; source?: string }>
     commentary?: string
   }
   as_of_ist?: string

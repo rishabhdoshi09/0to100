@@ -1279,7 +1279,7 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
   const selectedIndices = selected?.snapshot?.indices?.length
     ? selected.snapshot.indices
     : (selected?.is_new && Array.isArray((pulse.snapshot as { indices?: unknown[] } | undefined)?.indices)
-      ? ((pulse.snapshot as { indices: Array<{ name: string; price?: number; chg_pct?: number }> }).indices)
+      ? ((pulse.snapshot as { indices: Array<{ name: string; price?: number; chg_pct?: number; as_of?: string | null; stale?: boolean | null }> }).indices)
       : [])
 
   return (
@@ -1433,13 +1433,15 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
           )}
           {selectedIndices.length > 0 ? (
             <>
-              <h3>Latest session</h3>
+              <h3>Latest completed session</h3>
               <ul>
                 {selectedIndices.map((idx) => (
                   <li key={idx.name}>
                     {idx.name}
                     {idx.chg_pct != null ? ` ${idx.chg_pct >= 0 ? '▲' : '▼'} ${idx.chg_pct.toFixed(2)}%` : ''}
                     {idx.price != null ? ` at ${money(idx.price, 0)}` : ''}
+                    {idx.as_of ? ` · session ${idx.as_of}` : ''}
+                    {idx.stale ? ' · stale' : ''}
                   </li>
                 ))}
               </ul>

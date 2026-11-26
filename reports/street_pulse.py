@@ -67,18 +67,41 @@ def _ts_is_ist_today(ts: Any) -> bool:
         return False
 
 
+def _expected_session() -> str | None:
+    """The latest completed NSE session the calendar expects now; None when it cannot say."""
+    try:
+        from data.bhavcopy_runtime import expected_latest_completed_session
+        return expected_latest_completed_session().isoformat()
+    except Exception:
+        return None
+
+
 def _market_snapshot() -> dict:
-    """NIFTY/BANKNIFTY from the official index cache + cached regime only."""
+    """NIFTY/BANKNIFTY from the official index cache + cached regime only.
+
+    Each tile is a COMPLETED session's close against the one before (basis), dated with
+    that session (as_of) and its source, and stale when that session is older than the
+    one the calendar expects (cycle 11: a previous session's move read as today's beside
+    the F&O desk's live change; with Kite logged out it was two sessions behind). An
+    expected session the calendar cannot give leaves ``stale`` unknown (None), never fresh.
+    """
     out: dict = {"indices": [], "commentary": ""}
     try:
         from data.index_store import latest_index_print
+        expected = _expected_session()
         for name, ticker in (("NIFTY 50", "^NSEI"), ("BANK NIFTY", "^NSEBANK")):
             q = latest_index_print(ticker) or {}
             if q.get("price"):
+                as_of = str(q.get("as_of") or "")[:10] or None
+                stale = True if not as_of else (None if expected is None else as_of < expected)
                 out["indices"].append({
                     "name": name,
                     "price": q["price"],
                     "chg_pct": q.get("chg_pct") or 0.0,
+                    "as_of": as_of,
+                    "source": str(q.get("source") or ""),
+                    "basis": "completed_session_close",
+                    "stale": stale,
                 })
     except Exception:
         pass
