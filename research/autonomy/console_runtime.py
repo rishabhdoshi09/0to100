@@ -216,6 +216,13 @@ def _heartbeat(
     return now
 
 
+#: The loop's exit waits at most this long for its runtime-heartbeat thread (cycle 10,
+#: C8.7-03). The host SIGKILLs the child STOP_GRACE_S (12 s) after its SIGTERM; the old wait,
+#: heartbeat_s / 2 + 0.5 (15.5 s in production), could outlast the whole grace behind one
+#: stalled disk write and skip sup.shutdown(). The thread is a daemon and writes atomically.
+RUNTIME_JOIN_DEADLINE_S = 2.0
+
+
 def run_visible_loop(
     supervisor,
     *,
@@ -440,7 +447,7 @@ def run_visible_loop(
     finally:
         supervisor._execute = original_execute
         runtime_stop.set()
-        runtime_thread.join(timeout=max(2.0, runtime_interval + 0.5))
+        runtime_thread.join(timeout=RUNTIME_JOIN_DEADLINE_S)   # never longer than this (C8.7-03)
         try:
             _write_runtime_status(
                 supervisor,
