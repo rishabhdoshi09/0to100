@@ -859,6 +859,8 @@ export type HomeOperatingSystem = {
     downside_to_stop_pct?: number | null
     confidence_score?: number | null
     win_probability_pct?: number | null
+    expected_return_pct?: number | null
+    holding_limit_sessions?: number | null
     confidence_source?: string
     effective_n?: number | null
     confidence_note?: string
@@ -875,6 +877,11 @@ export type HomeOperatingSystem = {
   }>
   buy_only?: BuyOnlySection | null
   research_watchlist?: Array<{
+    entry?: number | null
+    stop?: number | null
+    target?: number | null
+    expected_return_pct?: number | null
+    holding_limit_sessions?: number | null
     symbol?: string
     state?: string
     ranking_score?: number | null
@@ -1218,6 +1225,8 @@ export type RecommendationCard = {
   key_points?: string[]
   what_changes_mind?: string[]
   next_step?: string
+  holding_limit_sessions?: number | null
+  win_inputs?: { ev_stale?: boolean }
   evidence_panel?: RecommendationEvidencePanel
   case?: RecommendationCase
   methods?: RecoMethod[]

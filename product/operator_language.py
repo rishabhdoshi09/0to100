@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from typing import Any, Mapping
 
 # Machine codes → child-friendly sentences. Professional mode still shows the code.
@@ -82,6 +84,30 @@ def simple_reason(code: str | None, *, fallback: str = "") -> str:
 
 def simple_term(term: str) -> str:
     return SIMPLE_TERMS.get(term, term)
+
+
+def trade_plan_metrics(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Measured payoff projected on the displayed risk, plus the rule horizon."""
+    from core.evaluation_spec import HORIZON_SESSIONS
+
+    entry = row.get("entry") if row.get("entry") is not None else row.get("entry_price")
+    stop = row.get("stop") if row.get("stop") is not None else row.get("stop_price")
+    target = row.get("target") if row.get("target") is not None else row.get("target_price")
+    quality = row.get("trade_quality")
+    quality = quality if isinstance(quality, Mapping) else {}
+    expected_return = None
+    maximum_hold = None
+    try:
+        e, s, t = float(entry), float(stop), float(target)
+        if 0 < s < e < t and math.isfinite(t):
+            maximum_hold = HORIZON_SESSIONS
+            expectancy = float(quality.get("shrunk_expectancy_R"))
+            if math.isfinite(expectancy):
+                expected_return = round(100 * expectancy * (e - s) / e, 2)
+    except (TypeError, ValueError):
+        pass
+    return {"entry": entry, "stop": stop, "target": target,
+            "holding_limit_sessions": maximum_hold, "expected_return_pct": expected_return}
 
 
 def explain_opportunity(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -175,9 +201,7 @@ def explain_opportunity(row: Mapping[str, Any]) -> dict[str, Any]:
         "technical": reason or str(row.get("setup_label") or ""),
         "candidate_status": candidate_status or ("ENTER_NOW" if decision == "BUY" else ""),
         "cmp": row.get("cmp") if row.get("cmp") is not None else row.get("price"),
-        "entry": row.get("entry") if row.get("entry") is not None else row.get("entry_price"),
-        "stop": row.get("stop") if row.get("stop") is not None else row.get("stop_price"),
-        "target": row.get("target") if row.get("target") is not None else row.get("target_price"),
+        **trade_plan_metrics(row),
         "upside_to_target_pct": row.get("upside_to_target_pct"),
         "downside_to_stop_pct": row.get("downside_to_stop_pct"),
         "confidence_score": confidence_score,

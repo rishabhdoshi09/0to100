@@ -337,6 +337,12 @@ def _attach_trade_evidence(card: dict[str, Any], scored: Mapping[str, Any]) -> N
         card["win_probability"] = None
     entry = _f(card.get("entry") or scored.get("entry"))
     if entry:
+        from core.evaluation_spec import HORIZON_SESSIONS
+
+        stop = _f(card.get("stop"))
+        target = _f(card.get("target"))
+        if 0 < stop < entry < target:
+            card["holding_limit_sessions"] = HORIZON_SESSIONS
         try:
             from product.stop_engine import stop_plan
 

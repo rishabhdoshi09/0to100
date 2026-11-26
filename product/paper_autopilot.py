@@ -143,8 +143,7 @@ _EXPLORABLE_HISTORY_STAGES = ("HISTORICAL_UNPROVEN", "HISTORICAL_BOOTSTRAP")
 def _exploration_pick(decisions, *, day: str, evaluate, path=None):
     """Best research candidate re-run through every gate at half risk, or None.
 
-    Only names the production thesis turned away for tier alone
-    (LOW_QUALITY_SETUP) and whose entry is ready now are considered; the
+    Only technically ready names rejected for tier or unproven history are considered; the
     re-evaluation still applies entry-state, due-diligence, empirical,
     portfolio-risk and sizing gates. QT_PAPER_EXPLORATION=0 disables it.
     """
@@ -161,7 +160,9 @@ def _exploration_pick(decisions, *, day: str, evaluate, path=None):
         if decision.reason_code == HISTORICAL_EVIDENCE_PENDING and not any(
                 stage in str(decision.detail or "") for stage in _EXPLORABLE_HISTORY_STAGES):
             continue      # mismatch / gate error is an integrity problem, never explored
-        if bool(card.get("chase_risk")):
+        if (decision.breakdown or {}).get("historical_integrity_block"):
+            continue
+        if card.get("evidence_withdrawn") or card.get("chase_risk"):
             continue
         if str(card.get("entry_state") or "") != "ready":
             # The evidence gate turns technically-ready BUYs into WATCH, which
@@ -178,7 +179,7 @@ def _exploration_pick(decisions, *, day: str, evaluate, path=None):
         pool.append((priority, -float(_f(card.get("score")) or 0.0), decision.symbol, card))
     pool.sort()
     from product.reco_ensemble import TIER_GOOD
-    for _priority, _score, _symbol, card in pool[:3]:
+    for _priority, _score, _symbol, card in pool:
         probe = {**card, "reco_tier": TIER_GOOD, "lane": EXPLORATION,
                  "exploration_risk_pct": EXPLORATION_RISK_PCT}
         candidate = evaluate(probe)
@@ -386,11 +387,21 @@ def _empirical_fail(card: Mapping[str, Any]) -> bool:
     negative historical stream (EV *or* case memory) should reduce selection
     priority, not permanently prevent the system from collecting fresh forward
     evidence. Explicit policy blocks remain authoritative, and agreement from
-    both empirical streams is still a hard veto.
+    both empirical streams remains a hard veto. In the reduced-risk lane a
+    proven shared source carries one caution because the two summaries overlap.
     """
     if bool(card.get("empirical_block")):
         return True
-    return set(_empirical_failed_methods(card)) == {"ev", "case"}
+    if set(_empirical_failed_methods(card)) != {"ev", "case"}:
+        return False
+    if card.get("lane") == EXPLORATION:
+        shared_source = {
+            str(m.get("id")) for m in card.get("methods") or []
+            if m.get("status") == "fail" and m.get("outcome_source") == "signal_log"
+        }
+        if {"case", "ev"} <= shared_source:
+            return False
+    return True
 
 
 def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = None) -> float:
@@ -401,7 +412,7 @@ def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = 
     # One negative empirical stream is an exploration warning, not a paper-entry
     # veto. Penalise it so clean-evidence setups rank first while still allowing
     # forward-paper evidence to accumulate when no stronger setup exists.
-    empirical_penalty = 15.0 if len(_empirical_failed_methods(card)) == 1 else 0.0
+    empirical_penalty = 15.0 if _empirical_failed_methods(card) else 0.0
     try:
         from product.challenger_learning import paper_selection_adjustment
         learned = paper_selection_adjustment(card)
@@ -529,6 +540,11 @@ def _decorate(
         "parts": [dict(part) for part in base_breakdown.get("parts") or []],
     }
     decision.breakdown["pre_evolution_decision"] = pre_evolution_decision
+    history = dict((policy or {}).get("historical_forward_confidence") or {})
+    decision.breakdown["historical_integrity_block"] = bool(
+        history.get("required") and not history.get("paper_eligible")
+        and history.get("confidence_stage") not in _EXPLORABLE_HISTORY_STAGES
+    )
 
     base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
     try:
@@ -661,6 +677,8 @@ def evaluate_candidate(
     # happened (the backtest and forward tracker both require the high to
     # reach entry). Wait for a later cycle in which price has crossed it.
     last = _f(row.get("cmp") or row.get("price"))
+    if row.get("lane") == EXPLORATION and (last is None or not 0 < last < float("inf")):
+        return AutopilotDecision(symbol, WAIT, WAIT_FOR_ENTRY, "no usable market price for paper entry", row)
     if last is not None and last > 0 and entry > last * (1.0 + ENTRY_FILL_TOLERANCE):
         return AutopilotDecision(
             symbol, WAIT, WAIT_FOR_ENTRY,
@@ -1211,6 +1229,8 @@ def run_reco_paper_cycle(
     certified = _current_scan_certificate(payload) if cards is None else None
     for card in card_list:
         card = _withdraw_uncertified(dict(card), certified)
+        card.pop("lane", None)
+        card.pop("exploration_risk_pct", None)
         decision = evaluate_selection_candidate(
             card,
             book=book,
@@ -1240,6 +1260,7 @@ def run_reco_paper_cycle(
             _freeze(decision, group="REJECTED")
             rejections.append(decision.as_dict())
 
+    explorer = None
     if not ranked and entries_allowed and paper_enabled:
         explorer = _exploration_pick(
             decisions, day=day,
@@ -1274,8 +1295,11 @@ def run_reco_paper_cycle(
             for pos in (getattr(book, "open", {}) or {}).values()
             if str(getattr(pos, "symbol", "") or "").strip()
         ]
+        correlation_cards = _correlation_cards_from_canonical_eligibility(decisions)
+        if explorer is not None:
+            correlation_cards.append(explorer.card)
         corr_meta = correlations_for_candidates(
-            _correlation_cards_from_canonical_eligibility(decisions),
+            correlation_cards,
             held_symbols=held_symbols,
         )
         frozen_correlations = {

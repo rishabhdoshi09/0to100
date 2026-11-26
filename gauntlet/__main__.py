@@ -8,6 +8,8 @@ code is non-zero on ABORT so a pipeline can gate on trustworthy data.
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 import sys
 
 
@@ -20,7 +22,20 @@ def main(argv=None) -> int:
     ap.add_argument("--skip-validation", action="store_true",
                     help="DANGER: run without the dataset gate (never for real evidence)")
     ap.add_argument("--json", action="store_true", help="emit the report as JSON")
+    ap.add_argument("--geometry-checkpoint", type=Path, help="SQLite checkpoint for the local geometry study")
+    ap.add_argument("--development-before", help="First date of the untouched evaluation period")
+    ap.add_argument("--evaluation-before", help="Exclusive end date of the evaluation period")
     args = ap.parse_args(argv)
+    if args.geometry_checkpoint:
+        if args.skip_validation or args.factors or not args.development_before or not args.evaluation_before:
+            ap.error("geometry requires both date boundaries and dataset validation")
+        from gauntlet.geometry import run
+
+        report = run(args.geometry_checkpoint, cutoff=args.development_before, end=args.evaluation_before)
+        print(json.dumps(report, indent=2, allow_nan=False))
+        return 2 if report.get("status") == "ABORTED" else 0
+    if args.development_before or args.evaluation_before:
+        ap.error("date boundaries require --geometry-checkpoint")
 
     from gauntlet.runner import run_gauntlet
     from gauntlet.report import build_report, to_markdown
@@ -30,7 +45,6 @@ def main(argv=None) -> int:
     report = build_report(raw)
 
     if args.json:
-        import json
         print(json.dumps(report, indent=2, default=str))
     else:
         print(to_markdown(report))

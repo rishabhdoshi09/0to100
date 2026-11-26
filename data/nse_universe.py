@@ -239,7 +239,8 @@ def _is_non_stock_fund(symbol: str, name: str = "") -> bool:
     label = " ".join(str(name or "").strip().upper().split())
     if not sym:
         return False
-    if "LIQUID" in sym or sym.endswith("ETF") or sym.endswith("BEES"):
+    # Known fund symbols whose exchange codes do not identify them as ETFs.
+    if sym == "MON100" or "LIQUID" in sym or sym.endswith(("ETF", "BEES")):
         return True
     return any(marker in label for marker in (
         " EXCHANGE TRADED FUND",

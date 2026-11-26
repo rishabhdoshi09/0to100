@@ -325,7 +325,7 @@ def _proven(ev: dict | None) -> bool:
 #: 6 is the first whose walk-forward refuses out-of-order frames (a frame cut
 #: by position could hand a decision its future bars): an earlier report
 #: cannot certify, whatever its other provenance (GPT R1, cycle 6).
-EVIDENCE_MIN_SCHEMA = 6
+EVIDENCE_MIN_SCHEMA = 7          # 7: the walk-forward measures stocks only (cycle 12)
 
 
 def evidence_provenance_note(provenance, *, now=None) -> str:

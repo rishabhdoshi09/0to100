@@ -193,7 +193,8 @@ def _ev_method(row: Mapping[str, Any]) -> dict[str, Any]:
             f"{row.get('ev_last_outcome') or 'unknown'}", None)
     if lb > 0:
         return _method("ev", "pass", f"Conservative EV {lb:+.1f}% (n={n:.0f})", min(100.0, 50.0 + lb * 8))
-    return _method("ev", "fail", f"Conservative EV {lb:+.1f}% (n={n:.0f})", 0.0)
+    return {**_method("ev", "fail", f"Conservative EV {lb:+.1f}% (n={n:.0f})", 0.0),
+            "outcome_source": "signal_log"}
 
 
 def _conviction_method(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -218,7 +219,10 @@ def _case_method(row: Mapping[str, Any]) -> dict[str, Any]:
     if exp is not None and exp > 0:
         return _method("case", "pass", f"{n:.0f} similar · expectancy {exp:+.2f}R", min(100.0, 50.0 + exp * 20))
     if exp is not None and exp < 0:
-        return _method("case", "fail", f"{n:.0f} similar · expectancy {exp:+.2f}R", 0.0)
+        method = _method("case", "fail", f"{n:.0f} similar · expectancy {exp:+.2f}R", 0.0)
+        if row.get("case_live_n") == n and row.get("case_desk_n") == 0:
+            method["outcome_source"] = "signal_log"
+        return method
     proven = bool(row.get("case_proven"))
     if proven:
         return _method("case", "pass", f"{n:.0f} similar cases remembered", 70.0)
@@ -388,6 +392,8 @@ def _case_fields(row: Mapping[str, Any], cache: dict[str, dict[str, Any]]) -> di
         mem = cache[setup]
         return {
             "case_n_similar": mem.get("n") or 0,
+            "case_live_n": mem.get("live_n"),
+            "case_desk_n": mem.get("desk_n"),
             "case_expectancy_r": mem.get("expectancy_r"),
             "case_proven": int(mem.get("n") or 0) >= CASE_MIN_N,
         }

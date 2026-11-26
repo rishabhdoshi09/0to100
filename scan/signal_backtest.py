@@ -226,7 +226,33 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 # method) and per-row family correction; the live gate refuses anything older.
 # 5: alpha_accounting - every report reserves a look in research.alpha_ledger
 # before its family correction; the gate verifies the attestation.
-REPORT_SCHEMA = 6                  # 6: non-chronological frames refused (GPT R1, cycle 6)
+REPORT_SCHEMA = 7                  # 7: stocks only (cycle 12); 6: non-chronological frames refused (GPT R1, cycle 6)
+#: The walk-forward measures the universe the scan certifies: operating companies. Fund units
+#: (liquid-rate funds, ETFs, BEES) are excluded with the scan's own rule (cycle 12): a liquid
+#: fund's near-flat NAV gave a 0.01% stop and -282R "losses" that dominated tight-stop signals.
+UNIVERSE_FILTER = "stocks_only_v1"
+
+
+def _stock_symbols(symbols, names=None) -> list[str]:
+    from data.nse_universe import _is_non_stock_fund
+    names = names or {}
+    return [s for s in symbols if not _is_non_stock_fund(s, names.get(s, ""))]
+
+
+def _instrument_names() -> dict:
+    from data.nse_universe import _fetch_kite_cache
+
+    try:
+        return dict(_fetch_kite_cache().get("names") or {})
+    except (OSError, ValueError):
+        return {}
+
+
+def universe_note(symbols, *, stocks=None) -> dict:
+    """What the walk-forward's universe filter kept and dropped (recorded in the report)."""
+    all_syms = list(symbols)
+    stocks = _stock_symbols(all_syms) if stocks is None else stocks
+    return {"filter": UNIVERSE_FILTER, "excluded_funds": len(all_syms) - len(stocks), "stocks": len(stocks)}
 #: Weekly walk-forward reports re-test overlapping data about 52 times a year.
 #: Holm bounds false admissions per REPORT; the annual union bound spends the
 #: 5% family-wise budget across a year's reports (alpha / 52 each), so
@@ -379,6 +405,7 @@ def gate_program(run_config: dict | None = None) -> dict:
     cfg = dict(PRODUCTION_RUN_CONFIG if run_config is None else run_config)
     return {"family_method": FAMILY_METHOD, "eval_spec": _eval_spec_tag(_EVAL_HORIZON),
             "horizon_sessions": int(_EVAL_HORIZON), "sampling": SAMPLING, "report_schema": REPORT_SCHEMA,
+            "universe": UNIVERSE_FILTER,
             "run_config": {k: int(cfg[k]) for k in sorted(PRODUCTION_RUN_CONFIG) if k in cfg},
             "membership": (f"every catalogue signal (untested ones at p = 1) and every exact combination "
                            f"with >= {COMBO_MIN_TRADES} trades")}
@@ -935,7 +962,10 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
     # so it must never be filtered by that gate (verdicts are unused here).
     sc = UnifiedScanner(evidence_gate=False)
     stats: dict[str, dict] = {}
-    symbols = _spread_sample(store_symbols(), max_symbols)
+    all_symbols = list(store_symbols())
+    stocks = _stock_symbols(all_symbols, _instrument_names())
+    universe = universe_note(all_symbols, stocks=stocks)
+    symbols = _spread_sample(stocks, max_symbols)
 
     with _state_lock:
         _state.update(running=True, progress=0, total=len(symbols))
@@ -946,7 +976,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
                                    lookback_sessions, horizon, t0, on_trade,
                                    run_config={"sample_step": sample_step, "lookback_sessions": lookback_sessions,
                                                "max_symbols": max_symbols},
-                                   decision_grid=decision_grid or DECISION_GRID)
+                                   decision_grid=decision_grid or DECISION_GRID, universe=universe)
     finally:
         # Crash-proof: 'running' can never stick True and freeze the UI button
         with _state_lock:
@@ -954,10 +984,11 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
 
 
 def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
-                        horizon, t0, on_trade=None, run_config=None, decision_grid=GRID_ROLLING):
+                        horizon, t0, on_trade=None, run_config=None, decision_grid=GRID_ROLLING,
+                        universe=None, geometry=None):
     from data.bhavcopy_store import get_ohlcv
 
-    regime_series = _nifty_regime_series()      # None → regime split skipped
+    regime_series = _nifty_regime_series() if geometry is None else None
     # the calibration is frozen for the whole run — hash it ONCE, not per trade
     _calib_version = _calibration_version() if on_trade is not None else ""
     tgt_stats: dict[str, dict] = {}             # target label → aggregate
@@ -975,6 +1006,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         official_index = official_session_index(d.isoformat() for d in _dates_on_disk())
     except Exception:
         official_index = {}
+    if geometry is not None and not official_index:
+        raise ValueError("Geometry research requires verified NSE sessions")
     horizon_gaps = 0                            # trades whose window is not exactly `horizon` sessions
 
     evaluated = 0                               # symbols that had >= 1 analysed window (the save threshold)
@@ -993,21 +1026,30 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     ended_censored = 0                          # ... that were still open when prices stopped
     non_chronological = 0                       # frames refused: dates out of order or repeated
     for si, sym in enumerate(symbols):
+        if geometry is not None and geometry.completed(sym):
+            continue
         df = get_ohlcv(sym)
-        if df is None or len(df) < 60 + horizon + 20 or not {"high", "low", "close"} <= set(df.columns):
+        min_bars = 60 if geometry is not None else 60 + horizon + 20
+        if df is None or len(df) < min_bars or not {"high", "low", "close"} <= set(df.columns):
+            if geometry is not None:
+                geometry.save(sym, [])
             continue
         # Every window below is cut by POSITION (df.iloc[:t]). A frame whose
         # dates are not strictly increasing would hand a decision its future
         # bars, so it is refused, and counted in the report (GPT QT-01).
         if not pd.DatetimeIndex(df.index).is_monotonic_increasing or df.index.has_duplicates:
             non_chronological += 1
+            if geometry is not None:
+                raise ValueError(f"Unordered NSE history for {sym}")
             continue
         n = len(df)
         start = max(60, n - horizon - lookback_sessions)
         day_keys = list(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")) if official_index else []
         symbol_used = False
+        geometry_rows = []
         anchored = decision_grid == GRID_SESSION_ANCHORED
-        for t in range(start, n if official_index else n - horizon, 1 if anchored else sample_step):
+        last_t = n + 1 if geometry is not None else n if official_index else n - horizon
+        for t in range(start, last_t, 1 if anchored else sample_step):
             if anchored:
                 # The decision day is bar t-1: sampled iff its official ordinal
                 # (else, without an index, its bar position) is on the stride.
@@ -1019,11 +1061,13 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             # whatever bars come later. A window whose prefix reaches the last
             # official session is still being written: pending, not measured.
             avail = exact_prefix(day_keys, t, horizon, official_index) if official_index else horizon
-            if avail <= 0:
+            if avail <= 0 and geometry is None:
                 horizon_gaps += 1
                 continue
             partial = avail < horizon
-            if partial and day_keys[t + avail - 1] >= global_last:
+            if geometry is not None and not geometry.includes(day_keys[t - 1], official_index):
+                continue
+            if geometry is None and partial and day_keys[t + avail - 1] >= global_last:
                 continue
             if not symbol_used:
                 # Counted (save threshold, data span) only once it contributes a
@@ -1037,9 +1081,18 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                 except Exception:
                     seen_dates.update(str(x)[:10] for x in df.index)
             hist = df.iloc[:t]
+            scale = 1.0
+            if geometry is not None:
+                from data.corporate_actions import raw_price_multiplier
+
+                scale = raw_price_multiplier(hist)
+                if scale != 1:
+                    hist = geometry.rescale(hist, scale)
             try:
                 r = sc._analyze(sym, hist)
             except Exception:
+                if geometry is not None:
+                    raise
                 continue
             if r is None or not r.signals:
                 continue
@@ -1047,6 +1100,11 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             if risk <= 0:
                 continue
             fwd = df.iloc[t:t + avail]
+            if geometry is not None:
+                if scale != 1:
+                    fwd = geometry.rescale(fwd, scale)
+                geometry_rows.extend(geometry.measure(day_keys[t - 1], r, fwd, official_index))
+                continue
             # The same rulebook as the forward tracker and the paper book
             # (core.evaluation_spec): buy-stop fill at the open when it gaps
             # above entry, gap-aware stop/target exits, breakeven trail.
@@ -1157,8 +1215,14 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                         rg["closed"] += 1
                     elif outcome == "LOSS":
                         rg["closed"] += 1
+        if geometry is not None:
+            geometry.save(sym, geometry_rows)
+            continue
         with _state_lock:
             _state["progress"] = si + 1
+
+    if geometry is not None:
+        return geometry.report(symbols, official_index)
 
     # Overlapping 10-session windows: inference needs the session index.
     session_index = realised_session_index(seen_dates)
@@ -1294,6 +1358,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    # the rest of the report, so any change re-keys the evidence.
                                    "universe_sha256": binding["universe_sha256"],
                                    "symbols": len(symbols), "symbols_evaluated": evaluated,
+                                   "universe": dict(universe or {"filter": UNIVERSE_FILTER}),
                                    "run_config": program.get("run_config"),
                                    "data_first_session": binding["data_first_session"],
                                    "data_last_session": binding["data_last_session"],

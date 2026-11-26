@@ -459,6 +459,8 @@ def _canonical_research_watchlist(*, history_current: bool, exclude: set[str] | 
         board = {}
     if not board.get("available"):
         return []
+    from product.operator_language import trade_plan_metrics
+
     excluded = {str(x).upper() for x in (exclude or set())}
     out: list[dict[str, Any]] = []
     for raw in board.get("decisions") or []:
@@ -473,6 +475,7 @@ def _canonical_research_watchlist(*, history_current: bool, exclude: set[str] | 
         # RPEL/KALYANKJIL on Home twice with contradictory labels. The board is
         # rank-ordered, so the first occurrence is the one to keep.
         excluded.add(symbol)
+        row.update(trade_plan_metrics(row))
         row["research_only"] = True
         row["not_a_trade"] = True
         row["block_reason"] = str(

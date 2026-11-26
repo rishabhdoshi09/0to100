@@ -584,36 +584,24 @@ function HomeOsCard({
       {stockScanVerified && (os.opportunities || []).length ? (
         <div className="home-os-opps home-os-best-trades" aria-label="Best trades">
           <span>BEST TRADES</span>
-          <strong>Production-thesis qualified · rejected and extended names excluded</strong>
+          <strong>Qualified equity setups</strong>
           {(os.opportunities || []).slice(0, 5).map((row, index) => {
             const symbol = String(row.found || '').split(/\s+/)[0]
             return (
             <div key={`${row.found}-${index}`}>
               <span>{row.label || 'BUY'}</span>
               <strong>{row.found}</strong>
-              <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
+              <small>{row.why || row.meaning}</small>
               <small className="home-os-trade-levels">
-                CMP {row.cmp != null ? money(row.cmp, 2) : '—'} ·
-                {' '}Entry {row.entry != null ? money(row.entry, 2) : '—'} ·
+                Entry {row.entry != null ? money(row.entry, 2) : '—'} ·
                 {' '}Stop {row.stop != null ? money(row.stop, 2) : '—'} ·
                 {' '}Target {row.target != null ? money(row.target, 2) : '—'}
-                {row.upside_to_target_pct != null ? ` · target +${Number(row.upside_to_target_pct).toFixed(1)}%` : ''}
               </small>
               <small className="home-os-confidence">
-                {row.confidence_score != null
-                  ? `Evidence confidence ${Number(row.confidence_score).toFixed(1)}/100`
-                  : 'Evidence confidence building'}
-                {row.win_probability_pct != null ? ` · measured +R odds ${Number(row.win_probability_pct).toFixed(1)}%` : ''}
-                {depth === 'professional' && row.effective_n != null ? ` · effective n ${Number(row.effective_n).toFixed(1)}` : ''}
+                Profit probability {row.win_probability_pct != null ? `${pct(row.win_probability_pct)} · ${row.confidence_source === 'ACTIVE_FORWARD_PROVEN_MODEL' ? 'forward model' : 'research estimate'}` : 'unmeasured'} ·
+                {' '}Hold {row.holding_limit_sessions != null ? `up to ${row.holding_limit_sessions} sessions` : 'unmeasured'} ·
+                {' '}Expected net return {row.expected_return_pct != null ? pct(row.expected_return_pct) : 'unmeasured'}
               </small>
-              {depth === 'professional' && row.evolution_consensus && (row.evolution_consensus.qualified_count || 0) > 1 ? (
-                <small className="home-os-evolution-consensus">
-                  Policy consensus {row.evolution_consensus.selecting_count ?? 0}/{row.evolution_consensus.qualified_count}
-                  {row.evolution_consensus.consensus_pct != null ? ` (${Number(row.evolution_consensus.consensus_pct).toFixed(0)}%)` : ''}
-                  {row.evolution_consensus.main_dissent_reason ? ` · dissent: ${row.evolution_consensus.main_dissent_reason}` : ''}
-                  {' '}— context only, not a buy signal
-                </small>
-              ) : null}
               {symbol && onOpenPage ? (
                 <button
                   type="button"
@@ -642,26 +630,24 @@ function HomeOsCard({
       {(os.research_watchlist || []).length ? (
         <div className="home-os-opps home-os-research-watchlist" aria-label="Top research watchlist">
           <span>TOP RESEARCH WATCHLIST</span>
-          <strong>Research only · ranked names that are not currently eligible paper trades</strong>
+          <strong>Research candidates</strong>
           {(os.research_watchlist || []).slice(0, 5).map((row, index) => (
             <div key={`${row.symbol || 'watch'}-${index}`}>
               <span>{row.state || 'WATCH'}</span>
               <strong>{row.symbol || '—'}</strong>
-              <small>
-                rank {row.ranking_score != null ? Number(row.ranking_score).toFixed(2) : 'n/a'}
-                {row.learning_adjustment ? ` · learned ${Number(row.learning_adjustment) > 0 ? '+' : ''}${Number(row.learning_adjustment).toFixed(2)}` : ''}
-                {row.evidence_adjustment ? ` · evidence ${Number(row.evidence_adjustment) > 0 ? '+' : ''}${Number(row.evidence_adjustment).toFixed(2)}` : ''}
+              <small>{row.why || row.block_reason || 'Waiting for confirmation.'}</small>
+              <small className="home-os-trade-levels">
+                Entry {row.entry != null ? money(row.entry, 2) : '—'} ·
+                {' '}Stop {row.stop != null ? money(row.stop, 2) : '—'} ·
+                {' '}Target {row.target != null ? money(row.target, 2) : '—'}
               </small>
-              <small>{row.block_reason || row.why || 'Not currently eligible under the production thesis.'}</small>
-              {row.win_probability?.p_win != null ? (
-                <small>
-                  Win probability {Math.round(Number(row.win_probability.p_win) * 100)}%
-                  {row.win_probability.low_80 != null && row.win_probability.high_80 != null
-                    ? ` (80%: ${Math.round(Number(row.win_probability.low_80) * 100)}–${Math.round(Number(row.win_probability.high_80) * 100)}%)`
-                    : ''}
-                  {row.win_probability.label ? ` · ${String(row.win_probability.label).toLowerCase()}` : ''}
-                </small>
-              ) : null}
+              <small>
+                Profit probability {row.win_probability?.p_win != null && (Number(row.win_probability.effective_n) > 0)
+                  ? `${Math.round(row.win_probability.p_win * 100)}% · ${row.win_probability.label || 'research estimate'}`
+                  : 'unmeasured'} ·
+                {' '}Hold {row.holding_limit_sessions != null ? `up to ${row.holding_limit_sessions} sessions` : 'unmeasured'} ·
+                {' '}Expected net return {row.expected_return_pct != null ? pct(row.expected_return_pct) : 'unmeasured'}
+              </small>
               {row.symbol && onOpenPage ? (
                 <button
                   type="button"

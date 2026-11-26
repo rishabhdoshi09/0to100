@@ -103,77 +103,19 @@ function CardTile({
   card: RecommendationCard
   onSelect: (card: RecommendationCard) => void
 }) {
-  const upside = card.upside_to_target_pct ?? card.upside_from_entry_pct
-  const risk = (card.risk_tier || 'Medium').toLowerCase()
   const zone = buyZoneLabel(card)
-  const why = (card.why_now && card.why_now[0]) || card.qualify_reason || card.reason
-  const points = (card.key_points && card.key_points.length > 0)
-    ? card.key_points
-    : (card.why_now || []).filter(Boolean)
+  const why = card.why_now?.[0] || card.qualify_reason || card.reason
+  const expectedReturn = card.win_inputs?.ev_stale ? null : card.evidence_panel?.ev_pct
   return (
     <article className="reco-pick">
       <button type="button" className="reco-pick-hit" onClick={() => onSelect(card)}>
         <div className="reco-pick-row1">
           <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{recoCanonicalDecision(card)}</span>
           <span className="reco-opp">{card.reco_tier_label || card.opportunity_label || 'WATCH'}</span>
-          <span className={`reco-risk-chip ${risk}`}>
-            <span className="reco-risk-meter" aria-hidden="true" />
-            {card.risk_tier} Risk
-          </span>
         </div>
-        <div className="reco-pick-together">
-          <div className="reco-pick-identity">
-            <h3 className="reco-pick-name">{card.company || card.symbol}</h3>
-            <div className="reco-pick-sub">
-              <span>{card.symbol}</span>
-              <span className="reco-tag">{card.category_label}</span>
-              {card.horizon ? <span>{card.horizon}</span> : null}
-              {card.price_tag ? <span>{card.price_tag}</span> : null}
-            </div>
-            {card.primary_thesis ? <p className="reco-pick-setup">{card.primary_thesis}</p> : (card.setup_label ? <p className="reco-pick-setup">{card.setup_label}</p> : null)}
-            {card.sector && card.sector !== '—' ? (
-              <p className="reco-pick-note">
-                {card.sector}
-                {card.sector_leadership_score != null ? ` · ${card.sector_leadership_label || 'Sector'} ${Math.round(card.sector_leadership_score)}` : ''}
-                {card.sector_breadth ? ` · Breadth ${card.sector_breadth}` : ''}
-              </p>
-            ) : null}
-            {(card.families || []).some((f) => f.status === 'pass') ? (
-              <div className="reco-pick-tags" aria-label="Evidence families">
-                {(card.families || []).filter((f) => f.status === 'pass').map((f) => (
-                  <span key={f.id} className="reco-evidence-tag is-pass">{f.label}</span>
-                ))}
-                {card.family_confirms != null ? (
-                  <span className="reco-evidence-tag">{card.family_confirms} families</span>
-                ) : null}
-                {card.reco_tier_label ? (
-                  <span className="reco-evidence-tag">{card.reco_tier_label}</span>
-                ) : null}
-              </div>
-            ) : (card.methods || []).some((m) => m.status === 'pass') ? (
-              <div className="reco-pick-tags" aria-label="Research methods">
-                {(card.methods || []).filter((m) => m.status === 'pass').map((m) => (
-                  <span key={m.id} className="reco-evidence-tag is-pass">{m.label}</span>
-                ))}
-                {card.method_confirms != null ? (
-                  <span className="reco-evidence-tag">{card.method_confirms} methods</span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-          {points.length > 0 ? (
-            <div className="reco-key-points">
-              <span>Key points</span>
-              <ul>
-                {points.slice(0, 5).map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            why ? <p className="reco-pick-note">{why}</p> : <p className="reco-pick-note">No key points on this snapshot.</p>
-          )}
-        </div>
+        <h3 className="reco-pick-name">{card.company || card.symbol}</h3>
+        <p className="reco-pick-sub">{card.symbol} · {card.primary_thesis || card.setup_label || card.category_label}</p>
+        {why ? <p className="reco-pick-note">{why}</p> : null}
         <div className="reco-pick-kpis">
           <div>
             <span>{zone.label}</span>
@@ -187,40 +129,18 @@ function CardTile({
             <span>Stop</span>
             <strong>{card.stop != null ? money(card.stop, 2) : '—'}</strong>
           </div>
-          <div className="reco-gain">
-            <span>Potential upside</span>
-            {upside != null ? (
-              <strong className={upside < 0 ? 'neg' : ''}>
-                {upside >= 0 ? '↗ ' : '↘ '}
-                {pct(upside)}
-              </strong>
-            ) : (
-              <strong>—</strong>
-            )}
-          </div>
+          <div><span>Profit probability</span><strong>
+            {card.win_probability?.p_win != null && (Number(card.win_probability.effective_n) > 0)
+              ? `${Math.round(card.win_probability.p_win * 100)}% · ${card.win_probability.label || 'estimated'}`
+              : 'Unmeasured'}
+          </strong></div>
+          <div><span>Holding limit</span><strong>
+            {card.holding_limit_sessions != null ? `${card.holding_limit_sessions} sessions` : '—'}
+          </strong></div>
+          <div><span>Expected net return</span><strong>
+            {expectedReturn != null ? pct(expectedReturn) : 'Unmeasured'}
+          </strong></div>
         </div>
-        <div className="reco-status-row" aria-label="Decision status">
-          <StatusChip label="Setup Quality" value={card.setup_quality != null ? `${Math.round(card.setup_quality)}/100` : '—'} />
-          <StatusChip label="Payoff" value={card.expected_payoff} />
-          <StatusChip label="Evidence" value={card.evidence} />
-          <StatusChip label="Coverage" value={card.evidence_coverage != null ? `${Math.round(card.evidence_coverage)}%` : (card.research_decision_coverage != null ? `${Math.round(card.research_decision_coverage)}%` : '—')} />
-          <StatusChip label="Health" value={card.strategy_health} />
-          <StatusChip label="Market" value={card.market_support} />
-          <StatusChip label="Freshness" value={card.freshness || card.price_tag || 'Saved scan'} />
-          <StatusChip label="Decision" value={recoCanonicalDecision(card)} />
-        </div>
-        {(card.methods_supporting || []).length ? (
-          <p className="reco-pick-note">Supporting: {(card.methods_supporting || []).join(' · ')}</p>
-        ) : null}
-        {(card.methods_disagreeing || []).length ? (
-          <p className="reco-pick-note">Disagreeing: {(card.methods_disagreeing || []).join(' · ')}</p>
-        ) : null}
-        <CaseMemoryBox memory={card.case} />
-        {(card.blockers || []).length ? (
-          <p className="reco-pick-note">Blockers: {(card.blockers || []).join(' · ')}</p>
-        ) : (card.conflicts || []).length ? (
-          <p className="reco-pick-note">Conflicts: {(card.conflicts || []).join(' · ')}</p>
-        ) : null}
       </button>
     </article>
   )

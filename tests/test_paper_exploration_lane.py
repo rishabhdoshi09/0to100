@@ -69,3 +69,30 @@ def test_history_gate_pending_names_are_explored_first(tmp_path):
     decisions[2].detail = "history-first paper gate pending · HISTORICAL_GENERATION_MISMATCH · paper_ready_setups=0"
     pick = PA._exploration_pick(decisions, day="2026-11-11", evaluate=_enter, path=tmp_path / "x.json")
     assert pick.symbol == "RPEL"                      # unproven: explored; mismatch: never
+
+
+def test_exploration_considers_names_after_three_unfillable_plans(tmp_path):
+    decisions = [_decision(symbol, score=100 - i) for i, symbol in enumerate(("A", "B", "C", "D"))]
+    for decision in decisions:
+        decision.card.update(entry=100, stop=95, target=110, cmp=99, volume_ratio=2)
+    decisions[-1].card["cmp"] = 100
+    pick = PA._exploration_pick(
+        decisions, day="2026-11-26", path=tmp_path / "quota.json",
+        evaluate=lambda card: PA.evaluate_candidate(card, book=None),
+    )
+    assert pick.symbol == "D" and pick.card["lane"] == PA.EXPLORATION
+    assert decisions[-1].card["reco_tier"] == "watch"
+
+
+def test_only_confirmed_shared_empirical_source_counts_as_one_caution():
+    card = {"symbol": "TCS", "entry": 100, "stop": 95, "target": 110, "cmp": 100,
+            "volume_ratio": 2, "entry_state": "ready", "reco_tier": "good_setup",
+            "methods": [{"id": name, "status": "fail", "outcome_source": "signal_log"}
+                        for name in ("ev", "case")]}
+    evaluate = lambda **changes: PA.evaluate_candidate({**card, **changes}, book=None)
+    assert evaluate().reason_code == PA.EMPIRICAL_GATE_FAILED
+    assert evaluate(lane=PA.EXPLORATION).decision == PA.ENTER_NOW
+    assert evaluate(lane=PA.EXPLORATION, cmp=None).reason_code == PA.WAIT_FOR_ENTRY
+    assert evaluate(lane=PA.EXPLORATION, empirical_block=True).reason_code == PA.EMPIRICAL_GATE_FAILED
+    card["methods"][1].pop("outcome_source")
+    assert evaluate(lane=PA.EXPLORATION).reason_code == PA.EMPIRICAL_GATE_FAILED
