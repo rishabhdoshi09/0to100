@@ -124,7 +124,7 @@ def _regime() -> str:
 #: Input provenance recorded on every new row (Cycle 7). A row without it has
 #: UNKNOWN provenance: it is never inferred afterwards (for example from which
 #: source is authoritative today).
-INPUT_PROVENANCE_VERSION = "f002-input.v1"
+INPUT_PROVENANCE_VERSION = "f002-input.v2"   # v2 (cycle 9): bars unavailable at recorded_at dropped; one ranked generation
 
 
 def _hist(symbol: str):
@@ -146,54 +146,120 @@ def _hist(symbol: str):
         return None
 
 
-def _input_provenance(hist, cutoff: str):
+#: Sources whose daily bar for a session exists only once that session has closed: the
+#: official archive (bhavcopy). Its bar for the recording day is unavailable before the
+#: close unless it is the live intraday overlay (tagged with that date).
+EOD_ONLY_SOURCES = frozenset({"bhavcopy_store"})
+SESSION_CLOSE_IST = (15, 30)
+
+
+def _recorded_ist(recorded_at: str | None):
+    """(IST date, minutes after midnight IST) of ``recorded_at``; (None, None) when unknown."""
+    if not recorded_at:
+        return None, None
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        moment = datetime.fromisoformat(str(recorded_at))
+        ist = timezone(timedelta(hours=5, minutes=30))
+        moment = moment.replace(tzinfo=ist) if moment.tzinfo is None else moment.astimezone(ist)
+        return moment.date().isoformat(), moment.hour * 60 + moment.minute
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _input_provenance(hist, cutoff: str, recorded_at: str | None = None):
     """(hist cut to bars on or before ``cutoff``, provenance of that input).
 
     The source comes only from the frame's own tag (scan.bulk_fetcher tags every
     frame it serves); an untagged frame is 'unknown'. Bars after the cutoff (a
     replay, or a source that runs ahead of the session) are dropped and counted,
-    so no feature can see them.
+    so no feature can see them. So is every bar that did not EXIST at
+    ``recorded_at`` (cycle-9 item 4): one dated after the recording day, and an
+    official-archive bar of the recording day itself recorded before that
+    session's close (only the live overlay of that day exists then).
     """
     import pandas as pd
 
     prov = {"version": INPUT_PROVENANCE_VERSION, "cutoff": str(cutoff)[:10], "source": "none",
-            "snapshot_id": None, "symbol_hist_as_of": None, "bars": 0, "bars_after_cutoff_dropped": 0}
+            "snapshot_id": None, "symbol_hist_as_of": None, "bars": 0, "bars_after_cutoff_dropped": 0,
+            "bars_unavailable_at_record_dropped": 0, "recorded_at": recorded_at}
     if hist is None or not len(hist):
         return hist, prov
     attrs = dict(getattr(hist, "attrs", {}) or {})
     prov["source"] = str(attrs.get("quantterm_source") or "unknown")
     prov["snapshot_id"] = attrs.get("quantterm_snapshot_id")
+    overlay = str(attrs.get("quantterm_live_overlay_date") or "")[:10]
+    rec_day, rec_minutes = _recorded_ist(recorded_at)
     try:
         idx = pd.DatetimeIndex(hist.index)
         idx = idx.tz_localize(None) if idx.tz is not None else idx
-        keep = idx.normalize() <= pd.Timestamp(str(cutoff)[:10])
+        days = idx.normalize()
+        keep = days <= pd.Timestamp(str(cutoff)[:10])
         dropped = int((~keep).sum())
-        cut = hist[keep] if dropped else hist
+        available = keep.copy()
+        if rec_day is not None:
+            available &= days <= pd.Timestamp(rec_day)
+            before_close = rec_minutes < SESSION_CLOSE_IST[0] * 60 + SESSION_CLOSE_IST[1]
+            if prov["source"] in EOD_ONLY_SOURCES and before_close and overlay != rec_day:
+                available &= days < pd.Timestamp(rec_day)
+        unavailable = int((keep & ~available).sum())
+        cut = hist[available] if (dropped or unavailable) else hist
     except Exception:
         return hist, dict(prov, source=prov["source"], error="unparsable index")
     prov["bars_after_cutoff_dropped"] = dropped
+    prov["bars_unavailable_at_record_dropped"] = unavailable
     prov["bars"] = int(len(cut))
     prov["symbol_hist_as_of"] = _as_of_from_hist(cut) if len(cut) else None
     # A live (intraday) bar is not an archive bar: when the overlaid bar survived
     # the cutoff, say so (GPT C7V-07, cycle 7).
-    overlay = str(attrs.get("quantterm_live_overlay_date") or "")[:10]
     prov["live_overlay_date"] = overlay if overlay and prov["symbol_hist_as_of"] == overlay else None
     return cut, prov
 
 
+#: Generations a cross-sectional rank may be certified on, most authoritative first.
+CERTIFIED_SOURCES = ("kite_snapshot", "bhavcopy_store")
+
+
 def _rank_inputs(inputs: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    """What the cross-sectional ranking was computed from, and whether it is coherent.
+    """What the cross-sectional ranking was computed from: ONE input generation.
 
     A candidate set read across a Kite snapshot switch mixes two generations of
     history: ranking them together would freeze a percentile that describes
-    neither (GPT C7V-08, cycle 7). Such a set is not ranked.
+    neither (GPT C7V-08, cycle 7). Such a set is not ranked at all. Cycle 9 (item 4):
+    under Kite authority a name missing from the snapshot was read from the store, and
+    ranked beside Kite frames (another adjustment, another as-of). Now only the most
+    authoritative generation present is ranked (the Kite snapshot, else the official
+    store, else a set of ONE uncertified source, ranked but marked uncertified); a row of
+    another source, or one whose history ends before its generation's (a stale input),
+    is excluded from the cross-section with its reason. Two uncertified sources and no
+    certified one: nothing is ranked.
     """
-    snaps = sorted({str(i.get("snapshot_id")) for i in inputs.values()
+    present = {s: i for s, i in inputs.items() if i.get("source") not in (None, "none") and i.get("bars")}
+    snaps = sorted({str(i.get("snapshot_id")) for i in present.values()
                     if i.get("source") == "kite_snapshot" and i.get("snapshot_id")})
-    sources = sorted({str(i.get("source")) for i in inputs.values() if i.get("source") not in (None, "none")})
-    coherent = len(snaps) <= 1
-    return {"sources": sources, "snapshot_ids": snaps, "coherent": coherent,
-            "withheld": None if coherent else "MIXED_KITE_SNAPSHOTS"}
+    sources = sorted({str(i.get("source")) for i in present.values()})
+    out: dict[str, Any] = {"sources": sources, "snapshot_ids": snaps, "coherent": False, "withheld": None,
+                           "generation": None, "certified": False, "excluded": {}, "ranked": []}
+    if len(snaps) > 1:
+        out["withheld"] = "MIXED_KITE_SNAPSHOTS"
+        return out
+    if not sources:
+        out["coherent"] = True                  # nothing to mix: the rows carry no features
+        return out
+    source = next((s for s in CERTIFIED_SOURCES if s in sources), sources[0] if len(sources) == 1 else None)
+    if source is None:
+        out["withheld"] = "MIXED_UNCERTIFIED_SOURCES"
+        return out
+    members = {s: i for s, i in present.items() if i.get("source") == source}
+    as_of = max(str(i.get("symbol_hist_as_of") or "") for i in members.values())
+    excluded = {s: "SOURCE_MISMATCH" for s in present if s not in members}
+    excluded.update({s: "STALE_INPUT" for s, i in members.items() if str(i.get("symbol_hist_as_of") or "") != as_of})
+    out.update(coherent=True, generation={"source": source, "snapshot_id": snaps[0] if snaps else None,
+                                          "as_of": as_of},
+               certified=source in CERTIFIED_SOURCES, excluded=dict(sorted(excluded.items())),
+               ranked=sorted(s for s in members if s not in excluded))
+    return out
 
 
 def _as_of_from_hist(hist) -> str | None:
@@ -295,7 +361,7 @@ def build_shadow_records(
     symbols = [str(c.get("symbol") or "").upper() for c in detached if c.get("symbol")]
     hists, inputs = {}, {}
     for sym in symbols:
-        hists[sym], inputs[sym] = _input_provenance(_hist(sym), session_date)
+        hists[sym], inputs[sym] = _input_provenance(_hist(sym), session_date, recorded_at)
     as_ofs = [_as_of_from_hist(h) for h in hists.values() if h is not None and len(h)]
     # Feature bars are last official/hist date. Session date stays the IST
     # scan calendar so weekend/Monday scans do not collide with Friday event_ids.
@@ -303,7 +369,12 @@ def build_shadow_records(
     if as_ofs:
         hist_as_of = max(as_ofs)
     rank_inputs = _rank_inputs(inputs)
-    rs_table = _build_rs_table(symbols, hist_as_of, frames=hists) if rank_inputs["coherent"] else None
+    excluded = dict(rank_inputs["excluded"])
+    if rank_inputs["coherent"] and rank_inputs["generation"]:
+        hist_as_of = rank_inputs["generation"]["as_of"] or hist_as_of
+    # The market-wide RS table is built from the ranked generation's frames only.
+    rs_frames = {s: h for s, h in hists.items() if s not in excluded}
+    rs_table = _build_rs_table(symbols, hist_as_of, frames=rs_frames) if rank_inputs["coherent"] else None
 
     rows: list[dict[str, Any]] = []
     fam_counter: Counter[str] = Counter()
@@ -315,7 +386,7 @@ def build_shadow_records(
         for f in families:
             fam_counter[f] += 1
         hist = hists.get(sym)
-        feat = _features_for(sym, hist, rs_table) if hist is not None else {
+        feat = _features_for(sym, hist, None if sym in excluded else rs_table) if hist is not None else {
             "trend": {"available": False}, "rs": {"available": False},
         }
         if isinstance(feat, dict):
@@ -362,6 +433,17 @@ def build_shadow_records(
         for row in rows:
             row.update({"rs_rank": None, "rs_pctl_in_set": None, "r3_score": None,
                         "combined_shadow_rank": None})
+    elif excluded:
+        # The cross-section is the ranked generation alone; an excluded row keeps its own
+        # features and provenance, but no rank beside inputs it does not share (item 4).
+        production_rank = {id(row): row["production_rank"] for row in rows}
+        apply_shadow_ranks([row for row in rows if row["symbol"] not in excluded])
+        for row in rows:
+            row["production_rank"] = production_rank[id(row)]
+            if row["symbol"] in excluded:
+                row.update({"rs_rank": None, "rs_pctl_in_set": None, "trend_rank": None,
+                            "trend_pctl_in_set": None, "r3_score": None, "combined_shadow_rank": None,
+                            "rank_excluded": excluded[row["symbol"]]})
     set_id = candidate_set_id(scan_cycle_id)
     ph = protocol_hash()
     for row in rows:

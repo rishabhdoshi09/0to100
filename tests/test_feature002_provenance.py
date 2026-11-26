@@ -67,7 +67,11 @@ def test_bars_after_the_session_cutoff_never_reach_a_feature(build):
     inp = row_input(row)
     assert inp["bars_after_cutoff_dropped"] == int((full.index > "2026-08-24").sum()) > 0
     assert inp["symbol_hist_as_of"] <= "2026-08-24"
-    expected = compute_trend_features(full[full.index <= "2026-08-24"])
+    # Cycle 9 (item 4): the row is recorded at 10:30 on 2026-08-24, before that session's
+    # close, so the official archive's 08-24 bar did not exist yet either. This test used to
+    # let it through (expected = bars <= 08-24): a lookahead of one archive bar.
+    assert inp["bars_unavailable_at_record_dropped"] == 1 and inp["symbol_hist_as_of"] == "2026-08-21"
+    expected = compute_trend_features(full[full.index < "2026-08-24"])
     assert row["feature_snapshot"]["trend"]["price"] == expected["price"]
     assert row["feature_snapshot"]["trend"]["price"] != compute_trend_features(full)["price"]
 
