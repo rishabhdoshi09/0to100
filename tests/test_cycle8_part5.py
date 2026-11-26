@@ -121,9 +121,12 @@ def test_a_directory_rebound_to_the_database_is_never_opened(f1, monkeypatch):
             opened.append(fd)
         real_sync(fd)
 
+    by_name = []
+
     def rebind(path):
         if Path(path) != directory:
             return real_dir_sync(path)
+        by_name.append(path)
         directory.rename(parked)
         directory.symlink_to(db)                        # the name now leads to the database
         try:
@@ -134,9 +137,11 @@ def test_a_directory_rebound_to_the_database_is_never_opened(f1, monkeypatch):
 
     monkeypatch.setattr(repair, "_full_fsync", inspect)
     monkeypatch.setattr(repair, "_fsync_dir", rebind)
-    with pytest.raises(OSError):
-        repair.apply(manifest, "test", target_is_copy=True)
-    assert opened == []
+    # Cycle 9 (GPT C9B-01/07): the manifest's directory is synced through the descriptor the
+    # manifest lock pinned, never re-opened by name, so a name rebound to the database is never
+    # reached at all (it used to be refused by O_NOFOLLOW when the name was re-opened).
+    repair.apply(manifest, "test", target_is_copy=True)
+    assert by_name == [] and opened == []
     assert repair._sha256(db) == json.loads(manifest.read_text())["target_sha256"] or \
         repair.diagnose(db)["integrity_ok"]
 
