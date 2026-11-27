@@ -255,6 +255,40 @@ def test_failed_missed_exit_does_not_advance_past_the_stop(monkeypatch):
     assert [row["exit_date"] for row in replayed["positions_closed"]] == ["2026-09-03"]
 
 
+def test_verified_special_session_blocks_later_mark_until_archive_arrives():
+    data = {"2026-09-07": {"AAA": (100, 101, 99, 100)}}
+    brain = _DayBrain(data)
+    book = brain.intel_book
+    pos = book.open_position("S1", "AAA", 100, 95, 110, "2026-09-03", 20)
+    assert pos is not None
+    # This is a synthetic verified calendar: Friday is closed, Saturday trades.
+    def required(day):
+        return day.isoformat() in {"2026-09-05", "2026-09-07"}
+
+    incomplete = settle_paper_session(brain, "2026-09-07", session_required=required)
+    assert incomplete["status"] == "SETTLEMENT_INCOMPLETE"
+    assert "2026-09-05" in incomplete["error"]
+    assert not pos.last_marked_session and not book.closed
+    data["2026-09-05"] = {"AAA": (100, 101, 94, 99)}
+    result = settle_paper_session(brain, "2026-09-07", session_required=required)
+    assert result["status"] == "EOD_SETTLED"
+    assert [row["exit_date"] for row in result["positions_closed"]] == ["2026-09-05"]
+    assert result["missed_sessions_marked"] == ["2026-09-05"]
+
+
+def test_verified_calendar_rejects_nonminimum_invalid_cursor():
+    brain = _DayBrain({"2026-09-04": {"AAA": (100, 101, 99, 100)}})
+    book = brain.intel_book
+    good = book.open_position("S1", "AAA", 100, 95, 110, "2026-09-02", 20)
+    bad = book.open_position("S2", "BBB", 100, 95, 110, "2026-09-03", 20)
+    assert good is not None and bad is not None
+    bad.last_marked_session = "9999-13-01"
+    result = settle_paper_session(brain, "2026-09-04", session_required=lambda day: True)
+    assert result["status"] == "SETTLEMENT_INCOMPLETE"
+    assert "Invalid paper session cursor" in result["error"]
+    assert not good.last_marked_session
+
+
 def test_eod_production_singleton_refuses_to_mark_without_protected_adapter(monkeypatch):
     from research.auto_research import providers, scheduler
     from research.autonomy.outcome_liveness import _resolve_outcomes_light

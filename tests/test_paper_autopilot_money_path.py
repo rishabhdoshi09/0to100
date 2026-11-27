@@ -150,6 +150,17 @@ def test_pipeline_adapter_opens_protected_paper_position(tmp_path):
     assert orders[0].status == OM.PROTECTED
 
 
+def test_failed_book_save_does_not_credit_good_wait(monkeypatch):
+    credits = []
+    monkeypatch.setattr("product.paper_learning_loop.note_later_entry",
+                        lambda symbol, **kwargs: credits.append(symbol))
+    book = PaperBook(capital=100_000)
+    with pytest.raises(RuntimeError, match="durable save failed"):
+        _cycle(book, [_eligible_card()], durable_book_save=lambda: False)
+    assert not book.open
+    assert credits == []
+
+
 def test_watch_tier_is_rejected_not_entered(monkeypatch):
     # The production thesis itself never enters a watch-tier card.
     monkeypatch.setenv("QT_PAPER_EXPLORATION", "0")

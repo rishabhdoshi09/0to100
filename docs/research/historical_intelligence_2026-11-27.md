@@ -52,4 +52,12 @@ python -m research.scanner_attribution "$checkpoint"
 
 Repeat the Gauntlet command until COMPLETE. Analysis requires a completed checkpoint. Binding SHA-256 `d5a06b7fb29614c4a13ede5d5a37d2094c3ac4b0dac8859db58f4a71dc6712ca` includes source and archive identities, official sessions and model costs. Checkpoint file SHA-256 `d10b5bb5ce0d22a9e173bf8d2ecbfef5d42702a224fa8eb6282704c8e56d3882`. Analysis SHA-256 `1a9d327251a4b224aab643771f11af21aeedf759a43dff755d880ba8915c14e1`.
 
+Use the Gauntlet observation commit `9e37fbef2384de96e126c0a1e012406de358493d` to reopen this exact source-bound computation. The later settlement changes are outside the study but change the repository source digest.
+
+## Execution recovery
+
+The production EOD catch-up uses the verified NSE calendar. It skips a verified closure, includes documented special sessions, and fails before marking a later session when the earlier expected archive is unavailable. An unknown calendar year, invalid cursor, or cursor beyond the bounded catch-up requires recovery. The synthetic special-session fixture first withholds the Saturday archive and then supplies it, proving the stop settles on Saturday rather than the later regular date. Standalone scheduler dispatch on a special session remains unverified.
+
+An isolated two-position fault test settles one OMS order while interrupting the second, restores the old book snapshot, and replays both without duplicate OMS transitions. It then repeats the restore with both OMS orders already closed to model a failed book save. The reconstructed book applies the same total P&L once. These fixtures use the original bars and deterministic replay. The existing in-lock book commit prevents GOOD_WAIT credit when the entry cannot be persisted. An injected failed save verified that boundary. A crash after the book commit and before the later-entry marker or taken evidence is written still requires recovery. Audit projections skipped after a book save failure also remain unresolved.
+
 Production was left read-only. Separate backup and deployment approvals remain outstanding and live trading remains HARD-LOCKED.

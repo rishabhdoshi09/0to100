@@ -134,6 +134,55 @@ def test_interrupted_protected_exit_retries_without_losing_book_settlement(tmp_p
     assert not book.mark(bars, "2026-08-02") and len(book.closed) == 1
 
 
+def test_partial_multi_position_exit_recovers_after_book_restore(tmp_path, monkeypatch):
+    import pytest
+    from tests.test_paper_execution_pipeline import _intent as make_intent, _pipeline
+
+    events = EventStore(tmp_path / "events.jsonl")
+    pipeline, oms, _, _, _ = _pipeline(tmp_path, events)
+    runtime = SimpleNamespace(reconciled=True)
+    raw = PaperBook(capital=100_000)
+    book = InstitutionalPaperBookAdapter(raw, pipeline=pipeline, runtime_state=runtime)
+    for symbol in ("AAA", "BBB"):
+        intent = make_intent(symbol=symbol)
+        events.append(intent)
+        assert book.open_intent(intent, date="2026-08-01")
+    orders = {o.symbol: o.order_id for o in oms.list_orders()}
+    snapshot = raw.snapshot()
+    mark_closed = oms.mark_closed
+
+    def interrupted(order_id, **kwargs):
+        if order_id == orders["BBB"]:
+            raise RuntimeError("OMS close interrupted")
+        return mark_closed(order_id, **kwargs)
+
+    bars = {symbol: (100, 101, 89, 90) for symbol in orders}
+    with monkeypatch.context() as patch:
+        patch.setattr(oms, "mark_closed", interrupted)
+        with pytest.raises(RuntimeError, match="OMS close interrupted"):
+            book.mark(bars, "2026-08-02")
+    assert oms.get(orders["AAA"]).status == OM.CLOSED
+    assert oms.get(orders["BBB"]).status == OM.EXIT_PENDING
+    assert not raw.closed and raw.realized_pnl == 0
+
+    restored = PaperBook()
+    assert restored.restore(snapshot, strict=True)
+    restarted = InstitutionalPaperBookAdapter(restored, pipeline=pipeline, runtime_state=runtime)
+    closed = restarted.mark(bars, "2026-08-02")
+    assert {trade.symbol for trade in closed} == {"AAA", "BBB"}
+    assert all(oms.get(order_id).status == OM.CLOSED for order_id in orders.values())
+    assert restored.realized_pnl == pytest.approx(sum(trade.pnl for trade in closed))
+    assert not restarted.mark(bars, "2026-08-02")
+    # A failure to persist that successful mark leaves the earlier snapshot on disk.
+    after_failed_save = PaperBook()
+    assert after_failed_save.restore(snapshot, strict=True)
+    recovered = InstitutionalPaperBookAdapter(after_failed_save, pipeline=pipeline, runtime_state=runtime)
+    transitions = {order_id: len(oms.history(order_id)) for order_id in orders.values()}
+    assert len(recovered.mark(bars, "2026-08-02")) == 2
+    assert after_failed_save.realized_pnl == pytest.approx(restored.realized_pnl)
+    assert transitions == {order_id: len(oms.history(order_id)) for order_id in orders.values()}
+
+
 def test_legacy_intent_cannot_close_a_different_institutional_order(tmp_path):
     from execution.paper_exit import sync_paper_close
 

@@ -37,7 +37,7 @@ def _trade_row(trade: Any) -> dict[str, Any]:
 _CATCH_UP_MAX_DAYS = 45
 
 
-def catch_up_missed_sessions(book, bars_fn, day: str) -> dict[str, Any]:
+def catch_up_missed_sessions(book, bars_fn, day: str, *, session_required=None) -> dict[str, Any]:
     """Mark every completed session an open position missed, oldest first.
 
     The EOD settlement marks one session. When the host is down (owner's Mac
@@ -58,29 +58,40 @@ def catch_up_missed_sessions(book, bars_fn, day: str) -> dict[str, Any]:
         start = str(getattr(pos, "last_marked_session", "") or "")[:10] or str(getattr(pos, "entry_date", "") or "")[:10]
         if len(start) == 10:
             starts.append(start)
+    if session_required is not None and len(starts) != len(opens):
+        return {**out, "error": "Open paper position has no usable session cursor"}
     if not starts:
         return out
     try:
         end = _date.fromisoformat(str(day)[:10])
-        cursor = max(_date.fromisoformat(min(starts)), end - timedelta(days=_CATCH_UP_MAX_DAYS)) + timedelta(days=1)
+        start = (min(_date.fromisoformat(cursor) for cursor in starts)
+                 if session_required is not None else _date.fromisoformat(min(starts)))
+        floor = end - timedelta(days=_CATCH_UP_MAX_DAYS)
+        if session_required is not None and start < floor:
+            return {**out, "error": "Paper mark cursor predates the bounded catch-up window"}
+        cursor = max(start, floor) + timedelta(days=1)
     except ValueError:
-        return out
+        return {**out, "error": "Invalid paper session cursor"} if session_required is not None else out
     while cursor < end:
-        if cursor.weekday() < 5:
-            session = cursor.isoformat()
-            try:
+        session = cursor.isoformat()
+        try:
+            expected = session_required(cursor) if session_required is not None else cursor.weekday() < 5
+            if expected:
                 bars = dict(bars_fn(session) or {})
+                if not bars and session_required is not None:
+                    raise ValueError("Official archive unavailable for a verified NSE session")
                 if bars:
                     out["closed"].extend(book.mark(bars, session, allow_entry_session=False))
                     out["sessions"].append(session)
-            except Exception as exc:
-                out["error"] = f"{session}: {type(exc).__name__}: {exc}"[:240]
-                break
+        except Exception as exc:
+            out["error"] = f"{session}: {type(exc).__name__}: {exc}"[:240]
+            break
         cursor += timedelta(days=1)
     return out
 
 
-def reconcile_bars_held(book, bars_fn, *, max_days: int = _CATCH_UP_MAX_DAYS) -> list[dict[str, Any]]:
+def reconcile_bars_held(book, bars_fn, *, max_days: int = _CATCH_UP_MAX_DAYS,
+                        session_required=None) -> list[dict[str, Any]]:
     """Make ``bars_held`` mean completed sessions since entry, not marks applied.
 
     A position that missed marks before the catch-up existed keeps a short
@@ -113,7 +124,8 @@ def reconcile_bars_held(book, bars_fn, *, max_days: int = _CATCH_UP_MAX_DAYS) ->
             continue
         sessions = 0
         while day <= end:
-            if day.weekday() < 5 and traded(day.isoformat(), str(pos.symbol)):
+            expected = session_required(day) if session_required is not None else day.weekday() < 5
+            if expected and traded(day.isoformat(), str(pos.symbol)):
                 sessions += 1
             day += timedelta(days=1)
         if sessions and sessions != int(getattr(pos, "bars_held", 0) or 0):
@@ -122,7 +134,7 @@ def reconcile_bars_held(book, bars_fn, *, max_days: int = _CATCH_UP_MAX_DAYS) ->
     return changes
 
 
-def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
+def settle_paper_session(brain, session_date: str, *, session_required=None) -> dict[str, Any]:
     """Mark the existing PAPER book once for one official session.
 
     No strategy evaluation, recommendation generation or historical backtest is run here.
@@ -176,6 +188,17 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
     try:
         book = brain.intel_book
         open_before = len(getattr(book, "open", {}) or {})
+        if session_required is not None and open_before:
+            from datetime import date
+
+            try:
+                if not session_required(date.fromisoformat(day)):
+                    raise ValueError("The supplied date is not an NSE trading session")
+            except ValueError as exc:
+                return {"status": "BARS_UNAVAILABLE", "as_of_date": day,
+                        "positions_closed": [], "outcomes_recorded": [],
+                        "open_before": open_before, "open_after": open_before, "bars": 0,
+                        "warnings": [str(exc)], "live_locked": True}
         bars: dict[str, Any] = {}
         bars_fn = getattr(brain, "bars_fn", None)
         if callable(bars_fn):
@@ -206,7 +229,7 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                 "live_locked": True,
             }
 
-        catch_up = catch_up_missed_sessions(book, bars_fn, day)
+        catch_up = catch_up_missed_sessions(book, bars_fn, day, session_required=session_required)
         closed = list(catch_up.get("closed") or [])
         settlement_error = str(catch_up.get("error") or "")
         if bars and not settlement_error:
@@ -217,7 +240,7 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
         bars_held_fixes: list[dict[str, Any]] = []
         if callable(bars_fn) and not settlement_error:
             try:
-                bars_held_fixes = reconcile_bars_held(book, bars_fn)
+                bars_held_fixes = reconcile_bars_held(book, bars_fn, session_required=session_required)
             except Exception:
                 bars_held_fixes = []
         rows = [_trade_row(trade) for trade in closed]
@@ -311,18 +334,38 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                 pass
 
 
+def _verified_settlement_calendar():
+    from core.runtime_paths import logs_path
+    from research.intelligence.data import nse_calendar as calendar
+
+    path = logs_path("nse_calendar_manifest.json")
+    manifest = calendar.load_manifest(path if path.is_file() else None)
+    holidays = calendar.load_holidays()
+    years = calendar.covered_years(holidays, manifest)
+    special = calendar.documented_special_sessions(manifest)
+
+    def required(day):
+        if day.year not in years:
+            raise ValueError(f"Unverified NSE calendar year {day.year}")
+        return day.isoformat() in special or calendar.is_session(day, holidays)
+
+    return required
+
+
 def _resolve_outcomes_light(self, session_date: str, capability_failures=()):
     """Deps.resolve_outcomes replacement: PAPER marks + learning only."""
     scheduler = import_module("research.auto_research.scheduler")
     brain = scheduler.get_brain()
-    if (brain is getattr(scheduler, "_BRAIN", None) and brain.intel_book.open
+    production = brain is getattr(scheduler, "_BRAIN", None)
+    if (production and brain.intel_book.open
             and not getattr(brain, "intel_book_recovery_error", "")):
         from research.auto_research.providers import ensure_production_paper_pipeline
 
         if not ensure_production_paper_pipeline():
             return {"status": "PAPER_PIPELINE_UNAVAILABLE",
                     "warnings": ["Protected paper settlement adapter unavailable."]}
-    result = settle_paper_session(brain, session_date)
+    calendar = _verified_settlement_calendar() if production and brain.intel_book.open else None
+    result = settle_paper_session(brain, session_date, session_required=calendar)
     if result.get("status") != "EOD_SETTLED":
         return result
 
