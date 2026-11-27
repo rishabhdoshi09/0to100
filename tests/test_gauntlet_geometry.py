@@ -64,3 +64,38 @@ def test_frozen_snapshot_cache_survives_a_failed_read(tmp_path, monkeypatch):
 
     assert not bhavcopy_store._load_pkl(remove_invalid=False)
     assert cache.read_bytes() == b"archive from an incompatible environment"
+
+
+
+def test_report_scores_all_variants_with_development_only_exit_probabilities():
+    days = _days()
+    sessions = dict(zip(days, range(len(days))))
+    run = GeometryRun(sqlite3.connect(":memory:"), cutoff=days[80], end=days[160], binding={})
+    run.save("TCS", [
+        (split, days[day], variant, exit_kind, -1.0, -1.0, 1)
+        for split, day, exit_kind in (
+            ("development", 2, "WIN"), ("development", 3, "TARGET_GAP_SCRATCH"),
+            ("development", 4, "SCRATCH"), ("evaluation", 90, "FLAT"),
+        )
+        for variant in GRID
+    ])
+    report = run.report(["TCS"], sessions)
+    assert set(report["evaluation"]) == set(GRID)
+    assert report["selected"] is None
+    exits = report["evaluation"]["scanner"]["exit_calibration"]
+    assert exits["target_first"]["development_probability"] == pytest.approx(2.5 / 4.5)
+    assert exits["stop_first"]["development_probability"] == pytest.approx(1.5 / 4.5)
+    assert exits["time_expiry"]["development_probability"] == pytest.approx(0.5 / 4.5)
+    assert exits["time_expiry"]["evaluation_rate"] == 1.0
+    assert exits["time_expiry"]["brier"] == pytest.approx((1 - 0.5 / 4.5) ** 2)
+
+
+def test_reuses_successful_preflight_and_retries_failed_preflight(tmp_path):
+    checkpoint = tmp_path / "study.db"
+    with sqlite3.connect(checkpoint) as db:
+        run = GeometryRun(db, cutoff="2025-05-01", end="2025-08-01", binding={})
+        assert run.validate_once(lambda: {"ok": False}) == {"ok": False}
+        assert run.validate_once(lambda: {"ok": True}) == {"ok": True}
+    with sqlite3.connect(checkpoint) as db:
+        resumed = GeometryRun(db, cutoff="2025-05-01", end="2025-08-01", binding={})
+        assert resumed.validate_once(lambda: pytest.fail("preflight repeated")) == {"ok": True}

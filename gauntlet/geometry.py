@@ -32,6 +32,7 @@ GRID = {
     "buffer_floor_target": (0.005, 0.03, 0.05, 20),
 }
 MAX_HORIZON = max(spec[3] for spec in GRID.values())
+EXIT_CLASSES = ("target_first", "stop_first", "time_expiry")
 
 
 class GeometryRun:
@@ -49,12 +50,25 @@ class GeometryRun:
             if db.execute("SELECT spec FROM geometry_config WHERE id=1").fetchone()[0] != config:
                 raise ValueError("Checkpoint belongs to a different snapshot or experiment")
             db.execute("CREATE TABLE IF NOT EXISTS geometry_done (symbol TEXT PRIMARY KEY)")
+            db.execute("CREATE TABLE IF NOT EXISTS geometry_validation (id INTEGER PRIMARY KEY, report TEXT)")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS geometry_outcomes (
                     symbol TEXT, split TEXT, day TEXT, variant TEXT, outcome TEXT,
                     net_r REAL, net_pct REAL, holding INTEGER
                 )
             """)
+
+    def validate_once(self, validate):
+        """Reuse the successful preflight for the exact bound snapshot."""
+        cached = self.db.execute("SELECT report FROM geometry_validation WHERE id=1").fetchone()
+        if cached:
+            return json.loads(cached[0])
+        report = validate()
+        if report["ok"]:
+            with self.db:
+                self.db.execute("INSERT OR IGNORE INTO geometry_validation VALUES (1, ?)",
+                                (json.dumps(report, sort_keys=True),))
+        return report
 
     def completed(self, symbol):
         return self.db.execute("SELECT 1 FROM geometry_done WHERE symbol=?", (symbol,)).fetchone() is not None
@@ -114,19 +128,26 @@ class GeometryRun:
             else:
                 risk_fraction = (sim.fill_price - stop) / sim.fill_price
                 net_r = sim.r - cost_in_r(risk_fraction, "CNC")
-                yield (split, day, variant, sim.outcome, net_r, 100 * net_r * risk_fraction,
+                outcome = sim.outcome
+                if outcome == "SCRATCH" and sim.fill_price >= target:
+                    # The canonical simulator scratches a gap fill beyond the target.
+                    # The exit was triggered by the target, even though gross P&L was zero.
+                    outcome = "TARGET_GAP_SCRATCH"
+                yield (split, day, variant, outcome, net_r, 100 * net_r * risk_fraction,
                        1 + sim.exit_offset - sim.entry_offset)
 
     def _summary(self, split, variant):
-        total, n, wins, censored, net_r, net_pct, holding, sessions = self.db.execute("""
+        total, n, wins, censored, net_r, net_pct, holding, sessions, targets, stops, expired = self.db.execute("""
             SELECT count(*), count(net_r), sum(net_r > 0), sum(outcome='CENSORED'),
                    avg(net_r), avg(net_pct), avg(holding),
-                   count(DISTINCT CASE WHEN net_r IS NOT NULL THEN day END)
+                   count(DISTINCT CASE WHEN net_r IS NOT NULL THEN day END),
+                   sum(outcome IN ('WIN','TARGET_GAP_SCRATCH')), sum(outcome IN ('LOSS','SCRATCH')), sum(outcome='FLAT')
             FROM geometry_outcomes WHERE split=? AND variant=?
         """, (split, variant)).fetchone()
         return {
             "setups": total, "filled": n, "sessions": sessions, "censored": censored or 0,
             "positive_net_trades": wins or 0,
+            "exit_counts": dict(zip(EXIT_CLASSES, (targets or 0, stops or 0, expired or 0))),
             "probability_positive_net": (wins + 0.5) / (n + 1) if n else None,
             "mean_net_R": net_r, "mean_net_return_pct": net_pct,
             "mean_holding_sessions": holding,
@@ -134,6 +155,37 @@ class GeometryRun:
                 net_pct * n / (total - censored) if n else None
             ),
         }
+
+    def _exit_calibration(self, variant, development, evaluation, official_index):
+        from scan.signal_backtest import _evidence_fields
+
+        n_dev, n_eval = development["filled"], evaluation["filled"]
+        if not n_dev or not n_eval:
+            return {}
+        daily = self.db.execute("""
+            SELECT day, count(*), sum(outcome IN ('WIN','TARGET_GAP_SCRATCH')),
+                   sum(outcome IN ('LOSS','SCRATCH')), sum(outcome='FLAT')
+            FROM geometry_outcomes WHERE split='evaluation' AND variant=? AND net_r IS NOT NULL
+            GROUP BY day
+        """, (variant,)).fetchall()
+        result = {}
+        for offset, label in enumerate(EXIT_CLASSES, 2):
+            # A joint Dirichlet(0.5, 0.5, 0.5) prior keeps the three forecasts normalized.
+            p = (development["exit_counts"][label] + 0.5) / (n_dev + 1.5)
+            rate = evaluation["exit_counts"][label] / n_eval
+            clusters = {row[0]: (row[offset], row[1]) for row in daily}
+            complement = {day: (n - k, n) for day, (k, n) in clusters.items()}
+            low = _evidence_fields({"clusters": clusters}, official_index, horizon=MAX_HORIZON)["lower_r"]
+            inverse = _evidence_fields({"clusters": complement}, official_index, horizon=MAX_HORIZON)["lower_r"]
+            result[label] = {
+                "development_probability": p,
+                "evaluation_rate": rate,
+                "calibration_error": rate - p,
+                "brier": rate * (1 - p)**2 + (1 - rate) * p**2,
+                "evaluation_lower_95_one_sided": max(0, low) if low is not None else None,
+                "evaluation_upper_95_one_sided": min(1, 1 - inverse) if inverse is not None else None,
+            }
+        return result
 
     def report(self, symbols, official_index):
         with self.db:
@@ -148,7 +200,7 @@ class GeometryRun:
         from scan.signal_backtest import _evidence_fields
 
         evaluation = {}
-        for variant in dict.fromkeys(v for v in ("scanner", selected) if v):
+        for variant in GRID:
             result = self._summary("evaluation", variant)
             p = development[variant]["probability_positive_net"]
             baseline_p = development["scanner"]["probability_positive_net"]
@@ -165,6 +217,11 @@ class GeometryRun:
             result["realized_positive_net_rate"] = wins / n if n else None
             result.pop("probability_positive_net")
             result["development_probability_positive_net"] = p
+            result["exit_calibration"] = self._exit_calibration(
+                variant, development[variant], result, official_index)
+            if result["exit_calibration"]:
+                result["multiclass_brier"] = sum(
+                    item["brier"] for item in result["exit_calibration"].values())
             for label, prediction in (("brier", p), ("baseline_brier", baseline_p)):
                 result[label] = (
                     (wins * (1 - prediction)**2 + (n - wins) * prediction**2) / n
@@ -192,6 +249,7 @@ class GeometryRun:
         return {"evidence": "historical_research", "symbols": len(symbols),
                 "development_before": self.cutoff, "evaluation_before": self.end,
                 "grid": GRID, "development": development, "selected": selected,
+                "evaluation_policy": "Confirmatory for the development selection only. Other results are diagnostic.",
                 "evaluation": evaluation, "paired_comparison": comparison}
 
 
@@ -231,9 +289,6 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
     if not index_store.load_index_store_from_cache():
         return {"status": "ABORTED", "validation": {"ok": False,
                 "failed": ["verified_index_store_unavailable"]}}
-    validation = validate(sample=len(bhavcopy_store.store_symbols()))
-    if not validation["ok"]:
-        return {"status": "ABORTED", "validation": validation}
 
     # Bind the checkpoint to code (including local edits), runtime dependencies,
     # and the input files rather than trusting the checkpoint's filename.
@@ -254,11 +309,11 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
     verified_days = bhavcopy_store._dates_on_disk()
     if not verified_days or date.fromisoformat(end) > verified_days[-1]:
         raise ValueError("Evaluation end must be within verified NSE history")
-    from research.intelligence.data.nse_calendar import covered_years, load_holidays
+    from research.intelligence.data.nse_calendar import MANIFEST_PATH, covered_years, load_holidays
 
     years = covered_years(load_holidays())
-    if not set(range(verified_days[0].year, date.fromisoformat(end).year + 1)) <= years:
-        return {"status": "ABORTED", "validation": {"failed": ["incomplete_nse_calendar_coverage"]}}
+    uncovered = sorted(set(range(verified_days[0].year, date.fromisoformat(end).year + 1)) - years)
+    inputs["calendar_manifest"] = hashlib.sha256(MANIFEST_PATH.read_bytes()).hexdigest()
     sessions = official_session_index(d.isoformat() for d in verified_days)
     if not math.isfinite(round_trip_cost_pct("CNC")) or round_trip_cost_pct("CNC") <= 0:
         raise ValueError("Geometry research requires positive delivery trading costs")
@@ -273,8 +328,28 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
     names = _instrument_names()
     symbols = sorted(_stock_symbols(bhavcopy_store.store_symbols(), names))
     binding["symbols_sha256"] = hashlib.sha256(json.dumps(symbols).encode()).hexdigest()
+
+    def preflight():
+        report = validate(sample=len(bhavcopy_store.store_symbols()))
+        report["checks"].append({"check": "complete_nse_calendar_coverage", "ok": not uncovered,
+                                 "detail": f"Unverified years: {uncovered}" if uncovered else "All years verified"})
+        if uncovered:
+            report["failed"].append("complete_nse_calendar_coverage")
+            report["ok"] = False
+        return report
+
+    if not checkpoint.exists():
+        # An invalid snapshot must not reserve the path for a future study.
+        validation = preflight()
+        if not validation["ok"]:
+            return {"status": "ABORTED", "validation": validation}
+    else:
+        validation = None
     with closing(sqlite3.connect(checkpoint, timeout=30)) as db:
         geometry = GeometryRun(db, cutoff=cutoff, end=end, binding=binding)
+        validation = geometry.validate_once(preflight if validation is None else lambda: validation)
+        if not validation["ok"]:
+            return {"status": "ABORTED", "validation": validation}
         scanner = UnifiedScanner(evidence_gate=False, calibration_snapshot={"multipliers": {}})
         result = _run_backtest_inner(scanner, {}, symbols,
                                    5, len(verified_days), MAX_HORIZON, 0,
