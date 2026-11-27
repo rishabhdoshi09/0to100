@@ -159,6 +159,42 @@ def test_without_a_crash_the_credit_lands_at_once(wait):
     _credited_once()
 
 
+def test_committed_fill_can_replay_the_marker_after_process_dies(wait, monkeypatch, tmp_path):
+    from product import _paper_learning_loop_core as core
+    from product.paper_autopilot import AutopilotDecision, _intent_for
+    from research.auto_research.paper_book import PaperBook
+    from research.auto_research.scheduler import _paper_book_hash, load_committed_paper_book
+    from research.intelligence.event_store import EventStore
+    from tests.test_paper_autopilot_money_path import _eligible_card
+
+    monkeypatch.setenv("QT_TAKEN_EVIDENCE", str(tmp_path / "taken.jsonl"))
+    intent = _intent_for(AutopilotDecision("TCS", "ENTER_NOW", "ELIGIBLE", "ok", _eligible_card()),
+                         as_of=FILL, snapshot_id="committed-fill")
+    events_path = tmp_path / "events.jsonl"
+    events = EventStore(events_path)
+    events.append(intent)
+    book = PaperBook(capital=100_000)
+    assert book.open_intent(intent, date=FILL)
+    snapshot = book.snapshot()
+    snapshot["_runtime_commit"] = {"book_sha256": _paper_book_hash(snapshot)}
+    path = tmp_path / "book.json"
+    path.write_text(json.dumps(snapshot))
+    with monkeypatch.context() as patch:
+        _crash_at(patch, "before-marker")
+        with pytest.raises(_Crash):
+            core.note_later_entry("TCS", as_of=FILL)
+    assert not _rows()[0].get("later_entry_pending")
+
+    restored = load_committed_paper_book(path)
+    restored_events = EventStore(events_path)
+    assert core.recover_taken_entries(restored, restored_events, as_of="2026-09-16") == 1
+    assert core.recover_taken_entries(restored, restored_events, as_of="2026-09-16") == 0
+    _credited_once()
+    assert len(core._read_jsonl(core.taken_path())) == 1
+    _restart_and_settle()
+    _credited_once()
+
+
 def test_the_fill_is_marked_durably_before_anything_is_credited(wait, monkeypatch):
     from core import atomic_io
     from product import _paper_learning_loop_core as core
