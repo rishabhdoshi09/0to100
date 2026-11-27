@@ -29,9 +29,12 @@ outcome_pct ≥ WIN_PCT). Fail-open throughout.
 from __future__ import annotations
 
 import os as _os
+from collections import Counter
 
 import numpy as np
 from scipy.stats import norm
+
+from core.evaluation_spec import HORIZON_SESSIONS
 
 _ECE_BINS = int(_os.getenv("QT_CALIB_BINS", "10") or 10)
 _MIN_SLICE_N = int(_os.getenv("QT_CALIB_MIN_SLICE", "30") or 30)
@@ -90,6 +93,68 @@ def expected_calibration_error(probs, outcomes, n_bins: int = _ECE_BINS) -> floa
         return 0.0
     return float(sum(b["count"] * abs(b["obs_freq"] - b["mean_pred"])
                      for b in bins) / n)
+
+
+def discovery_exit_calibration(cycles, reference_cycles, *, training_cycles: int) -> dict:
+    """Compare two frozen pooled forecasts on the same later resolved fills.
+
+    Inputs are existing opportunity discovery cycle records. Missing entries
+    and censored fills are counted separately. This is a discovery diagnostic:
+    multiple fills within a decision cycle are not independent observations.
+    """
+    classes = ("target", "stop", "expiry")
+    allowed = {*classes, "missing_entry", "censored_after_entry"}
+    dates = [row["day"] for row in cycles]
+    ordinals = [row["ordinal"] for row in cycles]
+    if (dates != sorted(set(dates)) or dates != [row["day"] for row in reference_cycles]
+            or ordinals != [row["ordinal"] for row in reference_cycles]
+            or any(b - a < HORIZON_SESSIONS for a, b in zip(ordinals, ordinals[1:]))
+            or not 0 < training_cycles < len(dates)):
+        raise ValueError("Expected matching, strictly ordered and non-overlapping discovery cycles")
+
+    def outcomes(rows):
+        for row in rows:
+            for label, net in row["trades"]:
+                if label not in allowed or ((label in classes) != (net is not None)):
+                    raise ValueError("Inconsistent discovery exit outcome")
+                yield label
+
+    early = Counter(outcomes(cycles[:training_cycles]))
+    baseline = Counter()
+    for candidate, reference in zip(cycles[:training_cycles], reference_cycles[:training_cycles]):
+        slots = len(candidate["trades"])
+        if len(reference["trades"]) < slots:
+            raise ValueError("Reference must cover every selected slot")
+        baseline.update(outcomes([{"trades": reference["trades"][:slots]}]))
+    later_rows = cycles[training_cycles:]
+    later = list(outcomes(later_rows))
+    resolved = [classes.index(label) for label in later if label in classes]
+    result = {
+        "status": "UNMEASURED", "evaluation_cycles": len(later_rows),
+        "resolved_cycles": sum(any(label in classes for label, _ in row["trades"]) for row in later_rows),
+        "evaluation_counts": dict(Counter(later)), "resolved_fills": len(resolved),
+        "training_resolved_fills": sum(early[c] for c in classes),
+        "reference_training_resolved_fills": sum(baseline[c] for c in classes),
+    }
+    if not (resolved and result["training_resolved_fills"] and result["reference_training_resolved_fills"]):
+        return result
+
+    actual = np.eye(len(classes))[resolved]
+
+    def score(counts):
+        weights = np.array([counts[c] + .5 for c in classes])
+        forecast = weights / weights.sum()
+        return {
+            "probabilities": dict(zip(classes, forecast.tolist())),
+            "brier": float(np.mean(np.sum((forecast - actual) ** 2, axis=1))),
+            "log_loss": float(-np.log(forecast[resolved]).mean()),
+            "classwise_calibration_gap": dict(zip(classes, (forecast - actual.mean(axis=0)).tolist())),
+            "reliability": {kind: reliability_bins(np.full(len(actual), forecast[i]), actual[:, i])
+                            for i, kind in enumerate(classes)},
+        }
+
+    return {**result, "status": "DISCOVERY_DIAGNOSTIC",
+            "strategy_forecast": score(early), "reference_forecast": score(baseline)}
 
 
 def miscalibration_test(probs, outcomes) -> dict:
