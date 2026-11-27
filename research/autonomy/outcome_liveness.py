@@ -14,6 +14,7 @@ It does not create a second scheduler or trading path and never enables live mon
 from __future__ import annotations
 
 import os
+from importlib import import_module
 from typing import Any
 
 _INSTALLED = False
@@ -67,10 +68,14 @@ def catch_up_missed_sessions(book, bars_fn, day: str) -> dict[str, Any]:
     while cursor < end:
         if cursor.weekday() < 5:
             session = cursor.isoformat()
-            bars = dict(bars_fn(session) or {})
-            if bars:
-                out["closed"].extend(book.mark(bars, session, allow_entry_session=False))
-                out["sessions"].append(session)
+            try:
+                bars = dict(bars_fn(session) or {})
+                if bars:
+                    out["closed"].extend(book.mark(bars, session, allow_entry_session=False))
+                    out["sessions"].append(session)
+            except Exception as exc:
+                out["error"] = f"{session}: {type(exc).__name__}: {exc}"[:240]
+                break
         cursor += timedelta(days=1)
     return out
 
@@ -127,6 +132,14 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
     day = str(session_date or "")[:10]
     book = getattr(brain, "intel_book", None)
     open_count = len(getattr(book, "open", {}) or {}) if book is not None else 0
+    recovery_error = str(getattr(brain, "intel_book_recovery_error", "") or "")
+    if recovery_error:
+        return {
+            "status": "PAPER_BOOK_RECOVERY_FAILED", "as_of_date": day,
+            "positions_closed": [], "outcomes_recorded": [],
+            "open_before": open_count, "open_after": open_count, "bars": 0,
+            "warnings": [recovery_error[:240]], "live_locked": True,
+        }
     if not day:
         return {
             "status": "NO_SESSION",
@@ -193,16 +206,16 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                 "live_locked": True,
             }
 
-        catch_up: dict[str, Any] = {"sessions": [], "closed": []}
-        if callable(bars_fn):
-            try:
-                catch_up = catch_up_missed_sessions(book, bars_fn, day)
-            except Exception as exc:
-                catch_up = {"sessions": [], "closed": [], "error": f"{type(exc).__name__}: {exc}"[:240]}
+        catch_up = catch_up_missed_sessions(book, bars_fn, day)
         closed = list(catch_up.get("closed") or [])
-        closed += list(book.mark(bars, day, allow_entry_session=False) if bars else [])
+        settlement_error = str(catch_up.get("error") or "")
+        if bars and not settlement_error:
+            try:
+                closed.extend(book.mark(bars, day, allow_entry_session=False))
+            except Exception as exc:
+                settlement_error = f"{day}: {type(exc).__name__}: {exc}"[:240]
         bars_held_fixes: list[dict[str, Any]] = []
-        if callable(bars_fn):
+        if callable(bars_fn) and not settlement_error:
             try:
                 bars_held_fixes = reconcile_bars_held(book, bars_fn)
             except Exception:
@@ -211,13 +224,18 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
 
         # Persist book state first. Audit/event projection is useful, but it must never
         # be able to roll back a valid paper close if a decoder is temporarily degraded.
+        book_saved = False
         try:
-            brain._save_intel_book()
-        except Exception:
-            pass
+            if brain._save_intel_book() is False:
+                raise RuntimeError("paper book save returned failure")
+            book_saved = True
+        except Exception as exc:
+            save_error = f"Paper book save failed: {type(exc).__name__}: {exc}"[:240]
+            settlement_error = f"{settlement_error}; {save_error}"[:240] if settlement_error else save_error
 
         warnings: list[str] = []
-        if closed:
+        recorded: list[str] = []
+        if closed and book_saved:
             try:
                 from research.intelligence import decoder_registry as REG
                 from research.intelligence.runtime import events as EV
@@ -257,6 +275,7 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                     )
                 if hasattr(store, "save"):
                     store.save()
+                recorded = [str(row.get("strategy_id") or "") for row in rows if row]
             except Exception as exc:
                 warnings.append(f"Outcome audit projection degraded: {type(exc).__name__}: {exc}"[:240])
 
@@ -268,16 +287,17 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
             warnings.append(f"Runtime reconciliation degraded: {type(exc).__name__}: {exc}"[:240])
 
         return {
-            "status": "EOD_SETTLED",
+            "status": "SETTLEMENT_INCOMPLETE" if settlement_error else "EOD_SETTLED",
+            "error": settlement_error,
             "as_of_date": day,
             "positions_closed": rows,
-            "outcomes_recorded": [str(row.get("strategy_id") or "") for row in rows if row],
+            "outcomes_recorded": recorded,
             "open_before": open_before,
             "open_after": len(getattr(book, "open", {}) or {}),
             "bars": len(bars),
             "missed_sessions_marked": list(catch_up.get("sessions") or []),
             "bars_held_reconciled": bars_held_fixes,
-            "warnings": warnings + ([f"missed-session catch-up failed: {catch_up['error']}"] if catch_up.get("error") else []),
+            "warnings": warnings + ([f"Paper settlement interrupted: {settlement_error}"] if settlement_error else []),
             "settlement_lane": "EOD_ONLY",
             "full_intelligence_cycle": False,
             "historical_backtest": False,
@@ -293,9 +313,15 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
 
 def _resolve_outcomes_light(self, session_date: str, capability_failures=()):
     """Deps.resolve_outcomes replacement: PAPER marks + learning only."""
-    from research.auto_research.scheduler import get_brain
+    scheduler = import_module("research.auto_research.scheduler")
+    brain = scheduler.get_brain()
+    if (brain is getattr(scheduler, "_BRAIN", None) and brain.intel_book.open
+            and not getattr(brain, "intel_book_recovery_error", "")):
+        from research.auto_research.providers import ensure_production_paper_pipeline
 
-    brain = get_brain()
+        if not ensure_production_paper_pipeline():
+            return {"status": "PAPER_PIPELINE_UNAVAILABLE",
+                    "warnings": ["Protected paper settlement adapter unavailable."]}
     result = settle_paper_session(brain, session_date)
     if result.get("status") != "EOD_SETTLED":
         return result
@@ -355,15 +381,19 @@ def _run_outcome_resolution_light(ctx):
         )
 
     paper_status = str((result or {}).get("status") or "")
-    if paper_status in {"SKIPPED_LOCKED", "BARS_UNAVAILABLE", "NO_SESSION"}:
+    retryable = {
+        "SKIPPED_LOCKED": "PAPER_SETTLEMENT_BUSY",
+        "BARS_UNAVAILABLE": "PAPER_BARS_UNAVAILABLE",
+        "NO_SESSION": "PAPER_SESSION_UNAVAILABLE",
+        "SETTLEMENT_INCOMPLETE": "PAPER_SETTLEMENT_ERROR",
+        "PAPER_PIPELINE_UNAVAILABLE": "PAPER_PIPELINE_UNAVAILABLE",
+        "PAPER_BOOK_RECOVERY_FAILED": "PAPER_BOOK_RECOVERY_FAILED",
+    }
+    if paper_status in retryable:
         return J.JobResult(
             JS.RETRYABLE_FAILED,
             "paper outcome settlement not ready",
-            error_code=(
-                "PAPER_SETTLEMENT_BUSY" if paper_status == "SKIPPED_LOCKED"
-                else "PAPER_BARS_UNAVAILABLE" if paper_status == "BARS_UNAVAILABLE"
-                else "PAPER_SESSION_UNAVAILABLE"
-            ),
+            error_code=retryable[paper_status],
             error_message="; ".join(str(x) for x in ((result or {}).get("warnings") or []))[:240],
             metadata=result or {},
         )

@@ -228,6 +228,76 @@ def test_missed_sessions_age_the_position_and_holidays_are_skipped():
     assert next(iter(brain.intel_book.open.values())).bars_held == 3
 
 
+def test_failed_missed_exit_does_not_advance_past_the_stop(monkeypatch):
+    brain = _DayBrain({
+        "2026-09-02": {"AAA": (100, 101, 99, 100)},
+        "2026-09-03": {"AAA": (99, 100, 94, 99)},
+        "2026-09-04": {"AAA": (100, 101, 99, 100)},
+    })
+    book = brain.intel_book
+    pos = book.open_position("S1", "AAA", 100, 95, 110, "2026-09-01", 20)
+    assert pos is not None
+    mark = book.mark
+
+    def interrupted(bars, day, **kwargs):
+        if day == "2026-09-03":
+            raise RuntimeError("synthetic OMS interruption")
+        return mark(bars, day, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(book, "mark", interrupted)
+        incomplete = settle_paper_session(brain, "2026-09-04")
+    assert incomplete["status"] == "SETTLEMENT_INCOMPLETE"
+    assert "2026-09-03" in incomplete["error"]
+    assert pos.last_marked_session == "2026-09-02"
+    replayed = settle_paper_session(brain, "2026-09-04")
+    assert replayed["status"] == "EOD_SETTLED"
+    assert [row["exit_date"] for row in replayed["positions_closed"]] == ["2026-09-03"]
+
+
+def test_eod_production_singleton_refuses_to_mark_without_protected_adapter(monkeypatch):
+    from research.auto_research import providers, scheduler
+    from research.autonomy.outcome_liveness import _resolve_outcomes_light
+
+    brain = _DayBrain({"2026-09-04": {"AAA": (100, 101, 94, 100)}})
+    book = brain.intel_book
+    assert book.open_position("S1", "AAA", 100, 95, 110, "2026-09-03", 20)
+    monkeypatch.setattr(scheduler, "_BRAIN", brain)
+    monkeypatch.setattr(scheduler, "get_brain", lambda: brain)
+    monkeypatch.setattr(providers, "ensure_production_paper_pipeline", lambda: False)
+    result = _resolve_outcomes_light(None, "2026-09-04")
+    assert result["status"] == "PAPER_PIPELINE_UNAVAILABLE"
+    assert book.open and not book.closed
+
+
+def test_eod_failed_book_save_is_not_reported_as_complete(monkeypatch):
+    brain = _DayBrain({"2026-09-04": {"AAA": (100, 101, 94, 100)}})
+    assert brain.intel_book.open_position("S1", "AAA", 100, 95, 110, "2026-09-03", 20)
+    with monkeypatch.context() as patch:
+        patch.setattr(brain, "_save_intel_book", lambda: False)
+        result = settle_paper_session(brain, "2026-09-04")
+    assert result["status"] == "SETTLEMENT_INCOMPLETE"
+    assert "paper book save returned failure" in result["error"]
+    assert result["outcomes_recorded"] == []
+    assert settle_paper_session(brain, "2026-09-04")["status"] == "EOD_SETTLED"
+    assert len(brain.intel_book.closed) == 1
+
+
+def test_eod_preserves_unrecovered_book(monkeypatch):
+    brain = _DayBrain({"2026-09-04": {"AAA": (100, 101, 94, 100)}})
+    position = brain.intel_book.open_position("S1", "AAA", 100, 95, 110, "2026-09-03", 20)
+    assert position is not None
+    brain.intel_book_recovery_error = "book checksum mismatch"
+
+    def unexpected_save():
+        raise AssertionError("EOD must preserve the existing persisted book")
+
+    monkeypatch.setattr(brain, "_save_intel_book", unexpected_save)
+    result = settle_paper_session(brain, "2026-09-04")
+    assert result["status"] == "PAPER_BOOK_RECOVERY_FAILED"
+    assert position.bars_held == 0 and not brain.intel_book.closed
+
+
 def test_a_session_older_than_the_last_mark_is_never_applied():
     book = PaperBook(capital=100_000.0)
     book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-01", 20)

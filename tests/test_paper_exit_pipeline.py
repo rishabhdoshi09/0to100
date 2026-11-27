@@ -100,6 +100,40 @@ def test_repeated_mark_does_not_duplicate_exit_transitions(tmp_path):
     assert oms.get(order_id).status == OM.CLOSED
 
 
+def test_interrupted_protected_exit_retries_without_losing_book_settlement(tmp_path, monkeypatch):
+    import pytest
+    from tests.test_paper_execution_pipeline import _pipeline
+
+    events = EventStore(tmp_path / "events.jsonl")
+    intent = _intent()
+    events.append(intent)
+    pipeline, oms, _, protection, _ = _pipeline(tmp_path, events)
+    book = InstitutionalPaperBookAdapter(
+        PaperBook(capital=100_000), pipeline=pipeline,
+        runtime_state=SimpleNamespace(reconciled=True),
+    )
+    assert book.open_intent(intent, date="2026-08-01") is not None
+    order_id = oms.list_orders()[0].order_id
+    bars = {"AAA": (100, 101, 89, 90)}
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("injected interruption during OMS close")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(oms, "mark_closed", interrupted)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            book.mark(bars, "2026-08-02")
+
+    assert oms.get(order_id).status == OM.EXIT_PENDING
+    assert protection.get_by_order(order_id).status == CANCELLED
+    assert book.open and not book.closed and book.realized_pnl == 0
+    closed = book.mark(bars, "2026-08-02")
+    assert len(closed) == 1 and closed[0].paper_intent_id == intent.record_id
+    assert oms.get(order_id).status == OM.CLOSED
+    assert book.realized_pnl == closed[0].pnl
+    assert not book.mark(bars, "2026-08-02") and len(book.closed) == 1
+
+
 def test_legacy_intent_cannot_close_a_different_institutional_order(tmp_path):
     from execution.paper_exit import sync_paper_close
 

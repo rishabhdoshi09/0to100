@@ -1,6 +1,7 @@
 """Transparent PaperBook adapter that routes production through institutional state."""
 from __future__ import annotations
 
+from execution.oms.models import CLOSED
 from execution.paper_exit import sync_paper_close
 
 
@@ -27,10 +28,15 @@ class InstitutionalPaperBookAdapter:
         return result.position if result.opened else None
 
     def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True):
-        closed = self._book.mark(bars, date, allow_entry_session=allow_entry_session)
-        for trade in closed:
-            sync_paper_close(self._pipeline, trade)
-        return closed
+        def sync_exit(trade):
+            result = sync_paper_close(self._pipeline, trade)
+            if result is not None and result.order_status != CLOSED:
+                raise RuntimeError(f"paper OMS exit unresolved for {result.order_id}: {result.order_status}")
+
+        # Preserve the mark cursor and P&L until the deterministic OMS exit can
+        # be replayed safely. A completed OMS exit is a no-op on the next pass.
+        return self._book.mark(bars, date, allow_entry_session=allow_entry_session,
+                               before_settle=sync_exit)
 
     @property
     def institutional_execution_enabled(self) -> bool:

@@ -40,6 +40,14 @@ The existing calibration module now scores target-first, stop-first and expiry t
 
 Scores are descriptive, with one reliability point per class and only seven later cycles. Across same-date holdings the effective sample cannot be inferred from trade counts. Neither pooled improvement nor the risk ranking establishes stock-specific calibration or improves net expectancy. No user-facing probability is changed.
 
+## Protected paper execution and learning
+
+An isolated synthetic WATCH card passed the controlled exploration checks, entered at half-risk or less through OMS protection, retained its WATCH verdict, and preserved decision and intent identity through strict book restore. The next test-session stop cancelled protection and closed the OMS position. Duplicate marking added no P&L, and learning ingested one forward observation with zero additions on replay. This proves the fixture lifecycle using existing components. It establishes neither prospective profitability nor learning uplift.
+
+Fault injection reproduced a settlement gap with the earlier code. If the OMS close threw after protection was cancelled, the in-memory book had already erased the open position and posted P&L. The new ordering validates bars and close economics, synchronizes the simulated OMS exit, then applies the book mark and P&L. The same-session retry resumes an EXIT_PENDING order and settles once. This does not create a single transaction across OMS, protection, accounting and learning stores.
+
+Independent review found that EOD could quietly advance past a failed older session and that a fresh EOD process could use a raw book. EOD now stops at a thrown failure, preserves earlier completed marks, and reports a retryable failure. It requires the existing adapter for the production singleton when exposure is open and refuses to overwrite an unrecovered book. A failed book save prevents a successful settlement or learning status. The existing calendar loop still needs to distinguish an empty older archive result from an exchange holiday and account for special sessions. Audit projection interrupted by a failed save is not replayed by this change. The historical simulator, recommendation statuses and live interlocks retain their existing behavior.
+
 ## Verification and remaining gates
 
 | Assessment | Status | Evidence |
@@ -47,6 +55,7 @@ Scores are descriptive, with one reliability point per class and only seven late
 | Discovery execution and chronology | PASS | Archive identity and original cycles reproduced. Reserved data and the frozen relative-strength implementation were untouched. |
 | New strategy selection | FAIL | Both variants lose before added stress and trail matched random. |
 | Stock-specific calibration and learning uplift | UNVERIFIED | No untouched validation or prospective fills, and no demonstrated frozen-baseline improvement. |
+| Protected execution and learning fixture | PASS | Controlled WATCH probe, restored lineage, one settlement and one learning update. |
 | Production operation | BLOCKED | Read-only working volume, disabled agents, unresolved freeze index, interrupted paper cycle and RPEL risk reconciliation. Current independent full backup remains outstanding. |
 | Production action | BLOCKED | Separate approvals required for backup, ledger repair, write access, restart and deployment. Live remains HARD-LOCKED. |
 

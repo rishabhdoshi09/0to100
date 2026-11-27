@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from math import fsum, isclose, isfinite
+from typing import Callable
 from research.intelligence.runtime.position_sizing import size_long_cash
 
 
@@ -201,7 +202,8 @@ class PaperBook:
     def open_risk(self) -> float:
         return sum(p.qty * p.r_unit for p in self.open.values())
 
-    def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True) -> list[ClosedTrade]:
+    def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True,
+             before_settle: Callable[[ClosedTrade], None] | None = None) -> list[ClosedTrade]:
         """Plan every mark/exit before mutating the paper book.
 
         A bad bar or transaction-cost feed cannot partly close one position,
@@ -276,6 +278,10 @@ class PaperBook:
                 if be > 0 and new_trail < pos.entry_price and high >= pos.entry_price * (1 + be / 100):
                     new_trail = float(pos.entry_price)
                 planned_marks.append((pos, next_bars_held, new_trail))
+
+        if before_settle is not None:
+            for _, trade in planned_closes:
+                before_settle(trade)
 
         for pos, held, trail in planned_marks:
             pos.last_marked_session = session
