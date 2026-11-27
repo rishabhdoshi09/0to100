@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 import random
 
@@ -174,10 +175,12 @@ def run(root, symbols):
     from scan.unified_scanner import UnifiedScanner
 
     from core.live_volume import on_live_volume
+    from core.runtime_paths import logs_dir, runtime_root
 
-    if not root.is_dir() or on_live_volume(root):
-        raise ValueError("Specify an isolated research archive")
-    logs = root.resolve() / "logs"
+    if (not root.is_dir() or on_live_volume(root)
+            or root.resolve() != runtime_root().resolve()):
+        raise ValueError("Bind QT_RUNTIME_ROOT to the explicit isolated research archive")
+    logs = logs_dir()
     from data.nse_universe import _is_non_stock_fund
 
     stocks = sorted(set(symbols))
@@ -283,6 +286,7 @@ def main():
     ap.add_argument("--stocks", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
+    os.environ.setdefault("QT_RUNTIME_ROOT", str(args.root.resolve()))
     stocks = args.stocks.read_text().strip().split(",")
     result = run(args.root, [s.strip().upper() for s in stocks if s.strip()])
     with args.out.open("x") as file:

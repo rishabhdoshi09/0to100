@@ -266,6 +266,6 @@
     "target-first, stop-first and expiry calibration"
   ],
   "forward_evidence": "Use only prospective observations after registration. Preserve historical reserves. No shared holdout look, paper routing or BUY promotion is authorized by this specification.",
-  "discovery_source_sha256": "d9449ad86f4beccee8d344003b82b5a9b8b2b571f6fa04c7815d350e0c63cb44",
+  "discovery_source_sha256": "907b01c79afc72058533bae011d3d73651c4859a49899312d999246d218069ca",
   "discovery_report_sha256": "a7082529f23a09007071e80d69373db1eac6b30810a6365c25ce958e230086a8"
 }
