@@ -98,3 +98,26 @@ def test_repeated_mark_does_not_duplicate_exit_transitions(tmp_path):
 
     assert len(oms.history(order_id)) == transition_count
     assert oms.get(order_id).status == OM.CLOSED
+
+
+def test_legacy_intent_cannot_close_a_different_institutional_order(tmp_path):
+    from execution.paper_exit import sync_paper_close
+
+    intent = _intent()
+    events = EventStore(tmp_path / "events.jsonl")
+    events.append(intent)
+    oms = OmsStore(tmp_path / "oms.db")
+    protection = ProtectionStore(tmp_path / "protection.db")
+    pipeline = PaperExecutionPipeline(
+        oms_store=oms, protection_store=protection,
+        risk_store=RiskDecisionStore(tmp_path / "risk.db"),
+        tca_store=TcaStore(tmp_path / "tca.db"), event_store=events,
+    )
+    book = PaperBook(capital=100_000)
+    opened = pipeline.execute(intent, book=book, date="2026-08-01",
+                              runtime_state=SimpleNamespace(reconciled=True))
+    assert opened.opened
+    legacy = SimpleNamespace(strategy_id=intent.strategy_id, symbol=intent.symbol,
+                             paper_intent_id="legacy-position", exit_reason="STOP")
+    assert sync_paper_close(pipeline, legacy) is None
+    assert oms.get(opened.order_id).status == OM.PROTECTED

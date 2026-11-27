@@ -74,6 +74,7 @@ def test_full_paper_execution_reaches_protected_state(tmp_path):
     assert result.position.qty == 10
     order = oms.get(result.order_id)
     assert order.status == OM.PROTECTED
+    assert result.position.paper_intent_id == intent.record_id == order.trade_intent_id
     assert order.approved_quantity == 10
     assert order.filled_quantity == 10
     assert order.broker_order_id.startswith("paper-order-")

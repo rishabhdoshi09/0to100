@@ -73,6 +73,12 @@ class PaperExecutionPipeline:
         risk approval and simulated acknowledgement. A crash after opening but before recording
         the fill is repaired from the existing PaperBook position on the next call.
         """
+        position = book.open.get((intent.strategy_id, intent.symbol))
+        position_intent = str(getattr(position, "paper_intent_id", "") or "")
+        if position is not None and position_intent and position_intent != intent.record_id:
+            return PaperExecutionResult("", OM.REJECTED, None,
+                                        reason="Existing position belongs to a different intent")
+
         order = self.oms.ingest_intent(intent)
         initial_status = order.status
         resumed = initial_status != OM.PROPOSED
@@ -145,6 +151,9 @@ class PaperExecutionPipeline:
                 int(getattr(intent, "holding_horizon_days", 0) or 0),
                 risk_pct_of_capital=order.intended_risk_pct,
                 quantity=order.approved_quantity,
+                decision_id=str(getattr(intent, "decision_id", "") or ""),
+                paper_intent_id=order.trade_intent_id,
+                context_key=str(getattr(intent, "context_key", "") or ""),
             )
             if position is None:
                 order = self.oms.cancel(

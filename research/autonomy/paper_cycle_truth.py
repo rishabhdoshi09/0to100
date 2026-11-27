@@ -105,10 +105,18 @@ def install_paper_cycle_truth() -> None:
         session_phase="intraday",
         capability_failures=(),
     ):
-        from research.auto_research.scheduler import get_brain
+        from research.auto_research import scheduler
 
         live = self.live_feed
-        brain = get_brain()
+        brain = scheduler.get_brain()
+        # The management-only pass short circuits when the book is empty. New
+        # risk must never rely on that pass installing the protected adapter.
+        if brain is scheduler._BRAIN:
+            from research.auto_research.providers import ensure_production_paper_pipeline
+
+            if not ensure_production_paper_pipeline() and entries_allowed:
+                entries_allowed = False
+                entry_block_reason = "PAPER_PIPELINE_UNAVAILABLE"
 
         manage_fn = getattr(brain, "manage_intelligence_positions_day", None)
         if callable(manage_fn):

@@ -21,10 +21,12 @@ def sync_paper_close(pipeline, trade) -> PaperExitSyncResult | None:
     The function is idempotent. A missing active owner is a no-op because an earlier invocation
     may already have closed it. Multiple active owners are quarantined instead of guessed.
     """
+    intent_id = str(getattr(trade, "paper_intent_id", "") or "")
     candidates = [
         order for order in pipeline.oms.list_orders()
         if order.strategy_id == trade.strategy_id
         and order.symbol == trade.symbol
+        and (not intent_id or order.trade_intent_id == intent_id)
         and order.filled_quantity > 0
         and order.status not in OM.TERMINAL_STATUSES
     ]
