@@ -1698,6 +1698,13 @@ def run_learning_cycle(ctx) -> JobResult:
             failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
             unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
         )
+    if not historical and not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.relative_strength_shadow import nightly as relative_strength_nightly
+
+            result["relative_strength_shadow"] = relative_strength_nightly()
+        except Exception as exc:
+            result["relative_strength_shadow"] = {"status": "BLOCKED", "error": str(exc)[:200]}
     result["closed_market_replay"] = {
         "skipped": True,
         "reason": "historical_replay_has_dedicated_durable_job",
