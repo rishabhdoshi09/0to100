@@ -11,6 +11,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from research.autonomy import job_store as JS
@@ -670,6 +671,24 @@ def run_data_refresh(ctx) -> JobResult:
 
 
 def run_bhavcopy_update(ctx) -> JobResult:
+    key = str(getattr(getattr(ctx, "job", None), "idempotency_key", "") or "")
+    prefix, _, hour = key.rpartition(":special:")
+    if prefix.startswith("bhavcopy_update:") and hour:
+        try:
+            day = date.fromisoformat(prefix.removeprefix("bhavcopy_update:"))
+            now = ctx.deps.now_ist()
+            if (day > now.date() or (day == now.date() and now.time() < SCH.SPECIAL_ARCHIVE_POLL_START)
+                    or not SCH.verified_special_cash_session(day, ctx.deps.holidays())):
+                raise ValueError("Special session is not verified for official archive retrieval")
+            from data import bhavcopy_store as BS
+
+            if BS._download_day(day, retries=0, verified_special=True):
+                return JobResult(JS.SUCCEEDED, f"Official special-session archive ready for {day}")
+            return JobResult(JS.BLOCKED, f"Official special-session archive unavailable for {day}",
+                             blocked_on="BHAVCOPY_SOURCE")
+        except Exception as exc:
+            return JobResult(JS.RETRYABLE_FAILED, "Special-session archive retrieval failed",
+                             error_code="BHAVCOPY_ERROR", error_message=str(exc)[:240])
     try:
         info = ctx.deps.update_bhavcopy()
     except Exception as exc:
@@ -1059,6 +1078,8 @@ def run_market_scan(ctx) -> JobResult:
 
 def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
     phase = SCH.session_phase(now, holidays)
+    if SCH.verified_special_cash_session(now.date(), holidays):
+        return False, "SPECIAL_SESSION_SETTLEMENT_ONLY", phase
     if not SCH.entries_allowed_by_clock(now, holidays):
         return False, "ENTRY_WINDOW_CLOSED", phase
     caps = H.capabilities(ctx.active_failures | ({H.OWNER_PAUSED} if ctx.owner_paused else set()))

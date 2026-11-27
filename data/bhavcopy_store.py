@@ -229,12 +229,12 @@ def _is_valid_archive(path: Path, day: date) -> bool:
     return valid
 
 
-def _download_day(d: date, retries: int = 2) -> bool:
+def _download_day(d: date, retries: int = 2, *, verified_special: bool = False) -> bool:
     """
     Fetch one bhavcopy to disk. 404 = holiday (no retry). Network errors
     retry with backoff so a flaky connection can't punch holes in history.
     """
-    if not _is_session(d):
+    if not verified_special and not _is_session(d):
         return False
     path = _day_path(d)
     if path.exists():

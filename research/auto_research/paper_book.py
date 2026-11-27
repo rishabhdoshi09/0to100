@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date
 from math import fsum, isclose, isfinite
 from typing import Callable
 from research.intelligence.runtime.position_sizing import size_long_cash
@@ -128,6 +129,7 @@ class PaperBook:
         self.cost_model = cost_model
         self.open: dict[tuple, PaperPosition] = {}
         self.closed: list[ClosedTrade] = []
+        self.pending_eod_audit: list[tuple[str, int]] = []
         self.realized_pnl = 0.0
         self.equity_curve: list[float] = [self.capital]
         self.refusals: list[tuple] = []
@@ -390,9 +392,12 @@ class PaperBook:
                 "risk_config": self._risk_config()}
 
     def snapshot(self) -> dict:
-        return {"capital": self.capital, "realized_pnl": self.realized_pnl,
+        payload = {"capital": self.capital, "realized_pnl": self.realized_pnl,
                 "equity_curve": self.equity_curve, "closed": [t.as_dict() for t in self.closed],
                 "open": [p.as_dict() for p in self.open.values()], "risk_config": self._risk_config()}
+        if self.pending_eod_audit:
+            payload["pending_eod_audit"] = [list(item) for item in self.pending_eod_audit]
+        return payload
 
     def restore(self, snap: dict, *, strict: bool = False) -> bool:
         """Restore atomically; strict production recovery must report invalid books.
@@ -414,6 +419,15 @@ class PaperBook:
             if not all(isfinite(float(value)) for value in curve):
                 raise ValueError("non-finite paper equity curve")
             closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
+            audit = []
+            seen_indices = set()
+            for session, index in snap.get("pending_eod_audit", []):
+                if (type(index) is not int or index < 0 or index >= len(closed) or index in seen_indices
+                        or date.fromisoformat(session).isoformat() != session
+                        or session < closed[index].exit_date[:10]):
+                    raise ValueError("invalid paper audit projection cursor")
+                audit.append((session, index))
+                seen_indices.add(index)
             if strict:
                 for trade in closed:
                     prices = (trade.entry_price, trade.stop_price, trade.exit_price)
@@ -461,6 +475,7 @@ class PaperBook:
         self.realized_pnl = realized
         self.equity_curve = curve
         self.closed = closed
+        self.pending_eod_audit = audit
         self.open = opened
         if risk is not None:
             self.risk_per_trade_pct = risk["risk_per_trade_pct"]

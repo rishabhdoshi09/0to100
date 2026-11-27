@@ -244,6 +244,8 @@ def settle_paper_session(brain, session_date: str, *, session_required=None) -> 
             except Exception:
                 bars_held_fixes = []
         rows = [_trade_row(trade) for trade in closed]
+        first_closed = len(book.closed) - len(closed)
+        book.pending_eod_audit.extend((day, index) for index in range(first_closed, len(book.closed)))
 
         # Persist book state first. Audit/event projection is useful, but it must never
         # be able to roll back a valid paper close if a decoder is temporarily degraded.
@@ -258,14 +260,15 @@ def settle_paper_session(brain, session_date: str, *, session_required=None) -> 
 
         warnings: list[str] = []
         recorded: list[str] = []
-        if closed and book_saved:
+        if book.pending_eod_audit and book_saved:
             try:
                 from research.intelligence import decoder_registry as REG
                 from research.intelligence.runtime import events as EV
 
-                cycle_id = f"eod-settlement:{day}"
                 store = brain.event_store
-                for trade, row in zip(closed, rows):
+                for audit_day, index in book.pending_eod_audit:
+                    row = _trade_row(book.closed[index])
+                    cycle_id = f"eod-settlement:{audit_day}"
                     for rec in REG.decode("outcome", row, ctx={"split": "forward"}):
                         store.append(rec)
                     for rec in REG.decode("execution", row):
@@ -277,7 +280,7 @@ def settle_paper_session(brain, session_date: str, *, session_required=None) -> 
                         strategy_id=str(row.get("strategy_id") or ""),
                         symbol=str(row.get("symbol") or ""),
                         reason=str(row.get("exit_reason") or ""),
-                        event_ts=day,
+                        event_ts=audit_day,
                         summary={
                             "realized_R": round(float(row.get("realized_R") or 0.0), 4),
                             "pnl": round(float(row.get("pnl") or 0.0), 2),
@@ -290,7 +293,7 @@ def settle_paper_session(brain, session_date: str, *, session_required=None) -> 
                         EV.OUTCOME_DECODED,
                         strategy_id=str(row.get("strategy_id") or ""),
                         symbol=str(row.get("symbol") or ""),
-                        event_ts=day,
+                        event_ts=audit_day,
                         summary={
                             "realized_R": round(float(row.get("realized_R") or 0.0), 4),
                             "settlement_lane": "EOD_ONLY",
@@ -298,9 +301,12 @@ def settle_paper_session(brain, session_date: str, *, session_required=None) -> 
                     )
                 if hasattr(store, "save"):
                     store.save()
-                recorded = [str(row.get("strategy_id") or "") for row in rows if row]
+                recorded = [book.closed[index].strategy_id for _, index in book.pending_eod_audit]
+                book.pending_eod_audit.clear()
             except Exception as exc:
-                warnings.append(f"Outcome audit projection degraded: {type(exc).__name__}: {exc}"[:240])
+                projection_error = f"Outcome audit projection degraded: {type(exc).__name__}: {exc}"[:240]
+                warnings.append(projection_error)
+                settlement_error = settlement_error or projection_error
 
         try:
             brain.runtime_state.reconcile(book)
@@ -412,10 +418,26 @@ def _run_outcome_resolution_light(ctx):
 
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
-    session_date = SCH.last_completed_session_date(now, holidays) or now.date().isoformat()
-    official = J._official_ready(ctx)
-    available = str(official.get("available_session") or official.get("latest_date") or "")[:10]
-    if not official.get("current") and (not available or available < session_date):
+    try:
+        scheduled = SCH.scheduled_special_session(getattr(ctx, "job", None))
+    except ValueError:
+        return J.JobResult(JS.PERMANENT_FAILED, "Invalid special-session settlement date",
+                           error_code="INVALID_SPECIAL_SESSION")
+    from datetime import date
+
+    special = date.fromisoformat(scheduled) if scheduled else None
+    if special:
+        session_date = scheduled
+        ready = (SCH.verified_special_cash_session(special, holidays) and special <= now.date()
+                 and (special < now.date() or now.time() >= SCH.SPECIAL_ARCHIVE_POLL_START)
+                 and SCH.special_archive_available(special))
+        available = scheduled if ready else ""
+    else:
+        session_date = SCH.last_completed_session_date(now, holidays) or now.date().isoformat()
+        official = J._official_ready(ctx)
+        available = str(official.get("available_session") or official.get("latest_date") or "")[:10]
+        ready = official.get("current") or (available and available >= session_date)
+    if not ready:
         return J.JobResult(
             JS.BLOCKED,
             f"official completed-session bars required before outcome resolution ({available or 'none'} < {session_date})",

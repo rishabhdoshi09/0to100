@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import timedelta
 from pathlib import Path
 
 from research.autonomy import job_store as JS
@@ -323,7 +324,7 @@ class Supervisor:
                 elif job.job_type == SCH.DATA_REFRESH:
                     retire = False  # current session + eod refresh are both valid
                 elif job.job_type == SCH.BHAVCOPY_UPDATE:
-                    retire = not (key.endswith(":eod") or ":catchup:" in key)
+                    retire = not (key.endswith(":eod") or ":catchup:" in key or ":special:" in key)
                 elif job.job_type in {
                     SCH.CORPORATE_ACTIONS,
                     SCH.UNIVERSE_HISTORY,
@@ -885,6 +886,17 @@ class Supervisor:
         # lane so a US scan cannot block NSE paper/history learning.
         self._ensure_us_market_pipeline(now_ist)
 
+        # Special sessions have their own hours. Run only official-data and
+        # settlement work on this path, after publication can be verified.
+        day = now_ist.date()
+        if SCH.verified_special_cash_session(day, holidays):
+            if now_ist.time() >= SCH.SPECIAL_ARCHIVE_POLL_START:
+                Supervisor._enqueue_special_settlement(self, day, now_ist)
+            return
+        previous = day - timedelta(days=1)
+        if SCH.verified_special_cash_session(previous, holidays):
+            Supervisor._enqueue_special_settlement(self, previous, now_ist)
+
         # NSE F&O uses the same canonical 15-minute session clock as cash
         # discovery, but executes on its own PAPER-only market-ops lane.
         self._ensure_fo_market_pipeline(now_ist, holidays)
@@ -1167,6 +1179,16 @@ class Supervisor:
             except Exception:
                 return job
         return job
+
+    def _enqueue_special_settlement(self, day, now_ist) -> None:
+        if SCH.special_archive_available(day):
+            job = self.jobs.enqueue(SCH.OUTCOME_RESOLUTION,
+                                    idempotency_key=f"{SCH.forward_outcome_key(day.isoformat())}:special", critical=True)
+            if getattr(job, "status", None) == JS.BLOCKED and job.blocked_on == JOBS.DEP_OUTCOME_DATA:
+                self.jobs.requeue(job.job_id)
+        else:
+            bucket = now_ist.strftime("%Y-%m-%dT%H")
+            self.jobs.enqueue(SCH.BHAVCOPY_UPDATE, idempotency_key=f"bhavcopy_update:{day}:special:{bucket}")
 
     def _enqueue_post_market_grind(self, now_ist=None, session_date: str | None = None) -> None:
         """Settle / learn / research after the cash session without a second scan."""

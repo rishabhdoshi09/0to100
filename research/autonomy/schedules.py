@@ -54,6 +54,7 @@ ENTRY_WINDOW_END = _time(15, 15)
 MARKET_CLOSE = _time(15, 30)
 EOD_WINDOW_START = _time(18, 5)
 EOD_WINDOW_END = _time(20, 0)
+SPECIAL_ARCHIVE_POLL_START = _time(20, 5)
 SCAN_INTERVAL_MIN = 15
 
 
@@ -72,6 +73,32 @@ def _is_session_day(now_ist, holidays=None) -> bool:
     if not holidays:
         return True
     return day not in holidays and day.isoformat() not in holidays
+
+
+def verified_special_cash_session(day, holidays) -> bool:
+    """Require the same verified holiday binding as paper catch-up."""
+    from core.runtime_paths import logs_path
+    from research.intelligence.data import nse_calendar as calendar
+
+    path = logs_path("nse_calendar_manifest.json")
+    manifest = calendar.load_manifest(path if path.is_file() else None)
+    return (day.year in calendar.covered_years(holidays or (), manifest)
+            and day.isoformat() in calendar.documented_special_sessions(manifest))
+
+
+def special_archive_available(day) -> bool:
+    from data import bhavcopy_store
+
+    return bhavcopy_store._is_valid_archive(bhavcopy_store._day_path(day), day)
+
+
+def scheduled_special_session(job) -> str:
+    key = str(getattr(job, "idempotency_key", "") or "")
+    if not (key.startswith("forward_outcome:") and key.endswith(":special")):
+        return ""
+    from datetime import date
+
+    return date.fromisoformat(key.removeprefix("forward_outcome:").removesuffix(":special")).isoformat()
 
 
 def in_auth_window(now_ist, holidays=None) -> bool:

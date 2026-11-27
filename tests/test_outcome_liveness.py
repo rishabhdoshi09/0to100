@@ -313,8 +313,119 @@ def test_eod_failed_book_save_is_not_reported_as_complete(monkeypatch):
     assert result["status"] == "SETTLEMENT_INCOMPLETE"
     assert "paper book save returned failure" in result["error"]
     assert result["outcomes_recorded"] == []
-    assert settle_paper_session(brain, "2026-09-04")["status"] == "EOD_SETTLED"
+    recovered = settle_paper_session(brain, "2026-09-04")
+    assert recovered["status"] == "EOD_SETTLED" and recovered["outcomes_recorded"] == ["S1"]
     assert len(brain.intel_book.closed) == 1
+
+
+def test_partial_audit_projection_replays_after_book_and_event_store_restart(tmp_path, monkeypatch):
+    import json
+    from research.intelligence.event_store import EventStore
+
+    brain = _DayBrain({"2026-09-04": {"AAA": (100, 101, 94, 100)}})
+    book = brain.intel_book
+    assert book.open_position("S1", "AAA", 100, 95, 110, "2026-09-03", 20)
+    path = tmp_path / "events.jsonl"
+    brain.event_store = EventStore(path)
+    saved = {}
+    monkeypatch.setattr(brain, "_save_intel_book", lambda: saved.update(json.loads(json.dumps(book.snapshot()))))
+    append = brain.event_store.append
+
+    def interrupted(record):
+        if len(brain.event_store) == 1:
+            raise OSError("audit store interrupted")
+        return append(record)
+
+    monkeypatch.setattr(brain.event_store, "append", interrupted)
+    incomplete = settle_paper_session(brain, "2026-09-04")
+    assert incomplete["status"] == "SETTLEMENT_INCOMPLETE"
+    assert len(brain.event_store) == 1
+    restored = PaperBook()
+    assert restored.restore(saved, strict=True)
+    assert restored.pending_eod_audit == [("2026-09-04", 0)]
+
+    restarted = _DayBrain({})
+    restarted.intel_book = restored
+    restarted.event_store = EventStore(path)
+    completed = settle_paper_session(restarted, "2026-09-05")
+    assert completed["status"] == "EOD_SETTLED" and completed["outcomes_recorded"] == ["S1"]
+    assert len(restarted.event_store) == 4 and len(restored.closed) == 1
+    assert restored.realized_pnl == book.realized_pnl
+    assert settle_paper_session(restarted, "2026-09-05")["outcomes_recorded"] == []
+    assert len(restarted.event_store) == 4
+    # No subsequent book save has removed the durable cursor yet. The
+    # already-written event IDs must still suppress a replay after restart.
+    assert restored.restore(saved, strict=True)
+    restarted.event_store = EventStore(path)
+    assert settle_paper_session(restarted, "2026-09-06")["status"] == "EOD_SETTLED"
+    assert len(restarted.event_store) == 4 and len(restored.closed) == 1
+
+
+def test_verified_special_dispatch_is_archive_only_and_pins_settlement_day(monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from research.autonomy import jobs, schedules as sch
+    from research.autonomy.supervisor import Supervisor
+
+    special = datetime(2026, 11, 8, 20, 5)
+    later = datetime(2026, 11, 9, 20, 5)
+    state = {"ready": False}
+    monkeypatch.setattr(sch, "verified_special_cash_session", lambda day, holidays: day == special.date())
+    monkeypatch.setattr(sch, "special_archive_available", lambda day: state["ready"] and day == special.date())
+    enqueued = []
+    deps = SimpleNamespace(holidays=lambda: (), now_ist=lambda: later)
+    supervisor = SimpleNamespace(
+        deps=deps, _release_stale_official_blocks=lambda: None, _ensure_us_market_pipeline=lambda now: None,
+        jobs=SimpleNamespace(enqueue=lambda kind, **details: enqueued.append((kind, details))),
+    )
+    Supervisor.enqueue_due(supervisor, special.replace(hour=14))
+    assert not enqueued
+    Supervisor.enqueue_due(supervisor, special)
+    assert enqueued[-1] == (sch.BHAVCOPY_UPDATE, {"idempotency_key": "bhavcopy_update:2026-11-08:special:2026-11-08T20"})
+    Supervisor._enqueue_special_settlement(supervisor, special.date(), later)
+    assert enqueued[-1][1]["idempotency_key"] == "bhavcopy_update:2026-11-08:special:2026-11-09T20"
+    state["ready"] = True
+    Supervisor.enqueue_due(supervisor, special)
+    assert enqueued[-1] == (sch.OUTCOME_RESOLUTION, {"idempotency_key": "forward_outcome:2026-11-08:special", "critical": True})
+
+    settled = []
+    deps.resolve_outcomes = lambda day, failures: settled.append(day) or {"status": "EOD_SETTLED"}
+    monkeypatch.setattr("product.autonomous_loop.settle_official_outcomes", lambda day: {})
+    ctx = jobs._Ctx(deps, job=SimpleNamespace(idempotency_key="forward_outcome:2026-11-08:special"))
+    result = _run_outcome_resolution_light(ctx)
+    assert result.status == JS.SUCCEEDED and settled == ["2026-11-08"]
+    monkeypatch.setattr(sch, "verified_special_cash_session", lambda day, holidays: False)
+    assert _run_outcome_resolution_light(ctx).status == JS.BLOCKED
+    assert settled == ["2026-11-08"]
+
+
+def test_special_archive_job_fetches_exact_day_and_requeues_blocked_settlement(monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from data import bhavcopy_store
+    from research.autonomy import jobs, schedules as sch
+    from research.autonomy.supervisor import Supervisor
+
+    now = datetime(2026, 11, 9, 1)
+    day = datetime(2026, 11, 8).date()
+    monkeypatch.setattr(sch, "verified_special_cash_session", lambda candidate, holidays: candidate == day)
+    fetched = []
+    def fetch(candidate, *, retries, verified_special):
+        fetched.append((candidate, retries, verified_special))
+        return True
+
+    monkeypatch.setattr(bhavcopy_store, "_download_day", fetch)
+    deps = SimpleNamespace(now_ist=lambda: now, holidays=lambda: ())
+    job = SimpleNamespace(idempotency_key="bhavcopy_update:2026-11-08:special:2026-11-09T01")
+    assert jobs.run_bhavcopy_update(jobs._Ctx(deps, job=job)).status == JS.SUCCEEDED
+    assert fetched == [(day, 0, True)]
+
+    pending = SimpleNamespace(status=JS.BLOCKED, job_id="special", blocked_on=jobs.DEP_OUTCOME_DATA)
+    requeued = []
+    supervisor = SimpleNamespace(jobs=SimpleNamespace(enqueue=lambda *a, **k: pending, requeue=requeued.append))
+    monkeypatch.setattr(sch, "special_archive_available", lambda candidate: candidate == day)
+    Supervisor._enqueue_special_settlement(supervisor, day, now)
+    assert requeued == ["special"]
 
 
 def test_eod_preserves_unrecovered_book(monkeypatch):
