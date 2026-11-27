@@ -14,16 +14,21 @@ import pandas as pd
 
 from core.runtime_paths import REPO_ROOT, logs_path
 from product.challenger_shadow import FREEZE_MARGIN, IST, entry_deadline
+from research.autonomy.schedules import RELATIVE_STRENGTH_REGISTRATION
 from research.opportunity_discovery import SLOTS, STOP, TARGET, _features, _path, _rules, _summary, _trade
 
 SPEC = REPO_ROOT / "docs" / "research" / "opportunity_relative_strength_frozen.json"
 SPEC_SHA = "3ad2d8db51b3afb3a456cf4d2ed2a601f0d8da86cc45075c0145b5555f9804f8"
-REGISTRATION = "relative_strength_shadow_registration.json"
+REGISTRATION = RELATIVE_STRENGTH_REGISTRATION
 HORIZON = 10
 COST = 0.0032
 SCHEDULED_CYCLES = 24
 MIN_MATURE_CYCLES = 20
 DISCOVERY_COUNTS = {"target": 19, "stop": 44, "expiry": 6}
+
+
+class ArchivePending(ValueError):
+    """The official file has yet to arrive. Retry without fabricating a bar."""
 
 
 def _digest(payload):
@@ -101,7 +106,10 @@ def shortlist(day: date) -> dict:
         raise ValueError("Decision date must be a verified session with sufficient history")
     frames, integrity, digest = _inputs(days, spec["cohort"])
     if integrity["market_wide_excluded_sessions"]:
-        raise ValueError(f"Unverified archive window: {integrity['market_wide_excluded_sessions']}")
+        issues = integrity["market_wide_excluded_sessions"]
+        if "missing_archive" in issues.values() and set(issues.values()) == {"missing_archive"}:
+            raise ArchivePending(f"Missing archives: {', '.join(issues)}")
+        raise ValueError(f"Unverified archive window: {issues}")
     index = pd.DatetimeIndex(days)
     prices = pd.DataFrame({symbol: f.close for symbol, f in frames.items()}).reindex(index)
     daily = prices.pct_change(fill_method=None).mean(axis=1)
@@ -175,6 +183,7 @@ def nightly() -> dict:
     identity = sha256(raw).hexdigest()
     if not paths.parent.is_dir():
         raise ValueError("Approved registration directory missing")
+    pending = []
     with closing(sqlite3.connect(paths, timeout=30)) as db, db:
         db.execute("PRAGMA synchronous=FULL")
         db.execute("CREATE TABLE IF NOT EXISTS registration (id INTEGER PRIMARY KEY, digest TEXT)")
@@ -182,12 +191,25 @@ def nightly() -> dict:
         db.execute("INSERT OR IGNORE INTO registration VALUES (1, ?)", (identity,))
         if db.execute("SELECT digest FROM registration WHERE id=1").fetchone()[0] != identity:
             raise ValueError("Registration changed after observation began")
-        for i in range(0, min(len(days)-HORIZON, SCHEDULED_CYCLES*HORIZON), HORIZON):
-            signal = days[i]
+        plan = {days[i].isoformat(): (i, days[i+1:i+HORIZON+1])
+                for i in range(0, min(len(days)-HORIZON, SCHEDULED_CYCLES*HORIZON), HORIZON)}
+        for key, encoded in db.execute("SELECT session, prediction FROM cycles"):
+            if key not in plan:
+                raise ValueError("Calendar amendment changes the registered cycle schedule")
+            if encoded is not None:
+                old = json.loads(encoded)
+                digest = old.pop("payload_sha256", None)
+                ordinal, forward = plan[key]
+                if (digest != _digest(old) or old["ordinal"] != ordinal
+                        or old["forward_sessions"] != [d.isoformat() for d in forward]
+                        or old["session"] != key or old["spec_sha"] != SPEC_SHA
+                        or not registered <= datetime.fromisoformat(old["frozen_at"])
+                        < entry_deadline(date.fromisoformat(key))-FREEZE_MARGIN):
+                    raise ValueError("Frozen cycle integrity or calendar changed")
+        for key, (i, forward) in plan.items():
+            signal = date.fromisoformat(key)
             if signal > now.date():
                 break
-            key = signal.isoformat()
-            forward = days[i+1:i+HORIZON+1]
             read = db.execute("SELECT prediction, outcome FROM cycles WHERE session=?", (key,)).fetchone()
             if read is None:
                 if now >= entry_deadline(signal)-FREEZE_MARGIN:
@@ -195,7 +217,11 @@ def nightly() -> dict:
                     continue
                 if now < datetime.combine(signal, time(18), tzinfo=IST) or now < registered:
                     continue
-                prediction = shortlist(signal)
+                try:
+                    prediction = shortlist(signal)
+                except ArchivePending as exc:
+                    pending.append(str(exc))
+                    continue
                 rng = random.Random(spec["random_seed"] + i//HORIZON)
                 prediction.update(ordinal=i, frozen_at=datetime.now(IST).isoformat(),
                                   forward_sessions=[d.isoformat() for d in forward],
@@ -204,19 +230,17 @@ def nightly() -> dict:
                     continue
                 prediction["payload_sha256"] = _digest(prediction)
                 db.execute("INSERT OR IGNORE INTO cycles VALUES (?, ?, NULL)", (key, json.dumps(prediction)))
+                db.commit()
                 continue
             if read[0] is None or read[1] is not None or now.date() <= forward[-1]:
                 continue
             prediction = json.loads(read[0])
-            payload_sha = prediction.pop("payload_sha256", None)
-            if (payload_sha != _digest(prediction)
-                    or prediction["spec_sha"] != SPEC_SHA
-                    or not registered <= datetime.fromisoformat(prediction["frozen_at"])
-                    < entry_deadline(signal)-FREEZE_MARGIN
-                    or prediction["forward_sessions"] != [d.isoformat() for d in forward]):
-                raise ValueError("Frozen cycle provenance or calendar differs")
             frames, integrity, evidence = _inputs([signal, *forward], prediction["eligible"])
             if integrity["market_wide_excluded_sessions"]:
+                issues = integrity["market_wide_excluded_sessions"]
+                if set(issues.values()) != {"missing_archive"}:
+                    raise ValueError(f"Invalid settlement archive: {issues}")
+                pending.append(f"{key} settlement awaiting {', '.join(issues)}")
                 continue
             if integrity["archive_sha256"].get(key) != prediction["decision_archive_sha"]:
                 raise ValueError("Decision archive changed after the cycle was frozen")
@@ -227,6 +251,8 @@ def nightly() -> dict:
         records = [json.loads(row[0]) for row in db.execute(
             "SELECT outcome FROM cycles WHERE outcome IS NOT NULL ORDER BY session")]
         missed = db.execute("SELECT count(*) FROM cycles WHERE prediction IS NULL").fetchone()[0]
+    if pending:
+        raise ArchivePending("; ".join(pending))
     stats = _summary(records, 0, HORIZON) if records else {}
     forecast = historical_forecast()["exit_probability"]
     scores = [sum((p - (outcome == k))**2 for k, p in forecast.items())

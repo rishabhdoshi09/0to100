@@ -75,3 +75,48 @@ def test_registered_shadow_is_durable_and_late_decisions_are_missed(tmp_path, mo
     path.write_text(json.dumps(reg))
     with pytest.raises(ValueError, match="Registration changed"):
         shadow.nightly()
+
+
+def test_scheduler_surfaces_retryable_archive_wait_and_permanent_integrity(monkeypatch):
+    from research.autonomy import job_store as js
+    from research.autonomy.jobs import run_relative_strength_shadow
+
+    def pending():
+        raise shadow.ArchivePending("archive delayed")
+
+    monkeypatch.setattr(shadow, "nightly", pending)
+    retry = run_relative_strength_shadow(None)
+    assert retry.status == js.RETRYABLE_FAILED
+    assert retry.error_code == "SHADOW_ARCHIVE_PENDING"
+
+    def invalid():
+        raise ValueError("calendar changed")
+
+    monkeypatch.setattr(shadow, "nightly", invalid)
+    failed = run_relative_strength_shadow(None)
+    assert failed.status == js.PERMANENT_FAILED
+    assert failed.error_code == "SHADOW_INTEGRITY"
+
+
+def test_observer_archive_retry_uses_durable_supervisor_backoff():
+    from types import SimpleNamespace
+    from research.autonomy import schedules as schedules
+    from research.autonomy.supervisor import Supervisor
+
+    events = []
+    supervisor = SimpleNamespace(
+        clock=lambda: 1000,
+        _automatic_paper_identity=lambda *_: (False, "", ""),
+        jobs=SimpleNamespace(
+            complete=lambda *args, **kwargs: events.append(("complete", args, kwargs)),
+            reschedule_retry=lambda *args, **kwargs: events.append(("retry", args, kwargs)),
+        ),
+    )
+    job = SimpleNamespace(job_type=schedules.RELATIVE_STRENGTH_SHADOW, job_id="shadow-1", attempt=1)
+    Supervisor._retry_or_fail(supervisor, job, error_code="SHADOW_ARCHIVE_PENDING",
+                                      error_message="missing archive")
+    assert events[-1][0] == "retry" and events[-1][2]["when"] == 1300
+    job.attempt = 12
+    Supervisor._retry_or_fail(supervisor, job, error_code="SHADOW_ARCHIVE_PENDING",
+                                      error_message="missing archive")
+    assert events[-1][0] == "complete"

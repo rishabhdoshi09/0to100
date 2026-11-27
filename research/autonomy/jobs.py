@@ -1698,13 +1698,6 @@ def run_learning_cycle(ctx) -> JobResult:
             failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
             unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
         )
-    if not historical and not os.environ.get("PYTEST_CURRENT_TEST"):
-        try:
-            from product.relative_strength_shadow import nightly as relative_strength_nightly
-
-            result["relative_strength_shadow"] = relative_strength_nightly()
-        except Exception as exc:
-            result["relative_strength_shadow"] = {"status": "BLOCKED", "error": str(exc)[:200]}
     result["closed_market_replay"] = {
         "skipped": True,
         "reason": "historical_replay_has_dedicated_durable_job",
@@ -1798,6 +1791,20 @@ def run_news_refresh(ctx) -> JobResult:
 
 # Compatibility name retained for older tests.
 run_news_health = run_news_refresh
+
+
+def run_relative_strength_shadow(ctx) -> JobResult:
+    from product.relative_strength_shadow import ArchivePending, nightly
+
+    try:
+        result = nightly()
+    except ArchivePending as exc:
+        return JobResult(JS.RETRYABLE_FAILED, "shadow archive pending",
+                         error_code="SHADOW_ARCHIVE_PENDING", error_message=str(exc))
+    except ValueError as exc:
+        return JobResult(JS.PERMANENT_FAILED, "shadow integrity check failed",
+                         error_code="SHADOW_INTEGRITY", error_message=str(exc))
+    return JobResult(JS.SUCCEEDED, f"relative-strength shadow: {result['status']}", metadata=result)
 
 
 def run_tournament_cycle(ctx) -> JobResult:
@@ -1917,4 +1924,5 @@ HANDLERS = {
     SCH.HISTORICAL_PAPER_CYCLE: run_historical_paper_cycle,
     SCH.FNO_HISTORICAL_WALKFORWARD: run_fno_historical_walkforward,
     SCH.TOURNAMENT_CYCLE: run_tournament_cycle,
+    SCH.RELATIVE_STRENGTH_SHADOW: run_relative_strength_shadow,
 }

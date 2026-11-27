@@ -1196,6 +1196,13 @@ class Supervisor:
         except Exception:
             return
 
+        if logs_path("product", SCH.RELATIVE_STRENGTH_REGISTRATION).is_file():
+            self.jobs.enqueue(
+                SCH.RELATIVE_STRENGTH_SHADOW,
+                idempotency_key=f"relative_strength_shadow:{session_date}",
+                critical=False,
+            )
+
         outcome = self._requeue_if_official_blocked(self.jobs.enqueue(
             SCH.OUTCOME_RESOLUTION,
             idempotency_key=SCH.forward_outcome_key(session_date),
@@ -2334,7 +2341,7 @@ class Supervisor:
                 error_message=error_message,
             )
             return
-        eod_pending = error_code == "EOD_DATA_PENDING"
+        eod_pending = error_code in {"EOD_DATA_PENDING", "SHADOW_ARCHIVE_PENDING"}
         max_attempts = 12 if eod_pending else _MAX_ATTEMPTS
         if job.attempt >= max_attempts:
             self.jobs.complete(job.job_id, JS.PERMANENT_FAILED, error_code=error_code,
