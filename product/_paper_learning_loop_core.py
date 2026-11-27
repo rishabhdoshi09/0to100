@@ -220,8 +220,7 @@ def _lookup_taken(symbol: str, *, decision_id: str = "", entry_date: str = "") -
     rows = [r for r in _read_jsonl(taken_path()) if str(r.get("symbol") or "").upper() == symbol]
     if decision_id:
         for row in reversed(rows):
-            if (str(row.get("paper_decision_id") or "") == str(decision_id)
-                    and (not entry_date or str(row.get("entry_date") or row.get("as_of") or "")[:10] == entry_date[:10])):
+            if str(row.get("paper_decision_id") or "") == str(decision_id):
                 return row
     if entry_date:
         day = str(entry_date)[:10]
