@@ -158,11 +158,15 @@ def recover_taken_entries(book, events, *, as_of: str) -> int:
     end = date.fromisoformat(as_of)
     first = (end - timedelta(days=LATER_ENTRY_VERIFY_MAX_DAYS)).isoformat()
     eligible = [trade for trade in [*book.open.values(), *book.closed]
-                if first <= trade.entry_date <= as_of and trade.decision_id and trade.paper_intent_id]
+                if trade.entry_date <= as_of and trade.decision_id and trade.paper_intent_id]
     if not eligible:
         return 0
     path = taken_path()
     known = {_taken_key(row): row.get("paper_intent_id") for row in _read_jsonl(path) if row.get("paper_decision_id")}
+    eligible = [trade for trade in eligible if trade.entry_date >= first
+                or (trade.decision_id, trade.symbol, trade.entry_date) not in known]
+    if not eligible:
+        return 0
     if known:
         # A line can be visible even if the preceding append's sync failed.
         from core.atomic_io import durable_sync
@@ -171,18 +175,20 @@ def recover_taken_entries(book, events, *, as_of: str) -> int:
     intents = {intent.record_id: intent for intent in events.of_type("TradeIntent")}
     recovered = 0
     for trade in sorted(eligible, key=lambda trade: (trade.entry_date, trade.paper_intent_id)):
+        key = (trade.decision_id, trade.symbol, trade.entry_date)
+        recent = trade.entry_date >= first
         intent = intents.get(trade.paper_intent_id)
         if (intent is None or intent.source != "selection_authority" or not intent.reasons
                 or (intent.symbol, intent.strategy_id, intent.decision_id, intent.event_ts[:10])
                 != (trade.symbol, trade.strategy_id, trade.decision_id, trade.entry_date)
                 or intent.context_key != trade.context_key):
             continue
-        key = (trade.decision_id, trade.symbol, trade.entry_date)
         if key in known and known[key] not in (None, "", intent.record_id):
             raise ValueError("Committed fill conflicts with recorded taken intent")
-        credit = note_later_entry(trade.symbol, as_of=trade.entry_date, prior_sessions_only=True)
-        if credit.get("errors"):
-            raise RuntimeError("Recovered fill has pending GOOD_WAIT credit")
+        if recent:
+            credit = note_later_entry(trade.symbol, as_of=trade.entry_date, prior_sessions_only=True)
+            if credit.get("errors"):
+                raise RuntimeError("Recovered fill has pending GOOD_WAIT credit")
         if key in known:
             continue
         context = parse_context(intent.context_key)

@@ -161,6 +161,14 @@ def test_committed_entry_recovers_taken_evidence_after_interrupted_write(tmp_pat
     with pytest.raises(ValueError, match="Conflicting intent"):
         learning.record_taken_evidence([{**rows[0], "paper_intent_id": "other-intent"}], as_of="2026-09-12")
 
+    # Another isolated restore has the original fill but no taken ledger.
+    # Its age does not invalidate source-proven facts about the entry.
+    monkeypatch.setenv("QT_TAKEN_EVIDENCE", str(tmp_path / "older-taken.jsonl"))
+    assert learning.recover_taken_entries(committed, events, as_of="2026-11-01") == 1
+    assert learning.recover_taken_entries(committed, events, as_of="2026-11-01") == 0
+    assert credit == [("INFY", "2026-09-12")] * 3
+    assert learning._read_jsonl(learning.taken_path())[0]["paper_intent_id"] == intent.record_id
+
     payload["capital"] += 1
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="checksum"):
