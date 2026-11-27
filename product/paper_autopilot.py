@@ -1550,6 +1550,7 @@ def run_reco_paper_cycle(
             # The paper position's own decision id: the join key from its close
             # back to this entry (forward_soak.attach_closed_trades).
             "paper_decision_id": str(getattr(pos, "decision_id", "") or ""),
+            "paper_intent_id": str(getattr(pos, "paper_intent_id", "") or ""),
             "entry_date": str(getattr(pos, "entry_date", "") or day),
             "status": "TAKEN",
             "group": "TAKEN",

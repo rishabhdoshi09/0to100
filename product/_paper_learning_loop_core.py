@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -49,6 +49,10 @@ def ingested_path() -> Path:
     return _env_path("QT_LEARNING_INGESTED", INGESTED_PATH)
 
 
+def _taken_key(row):
+    return (row.get("paper_decision_id"), row.get("symbol"), row.get("entry_date") or row.get("as_of"))
+
+
 def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     """Append one record durably (taken-trade evidence, which a later close joins back to).
 
@@ -71,6 +75,15 @@ def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
         # record cut by a short write (GPT C10-02). Closing the descriptor releases it.
         fcntl.flock(fd, fcntl.LOCK_EX)
         size = os.fstat(fd).st_size
+        key = _taken_key(row)
+        if key[0]:
+            for item in _read_jsonl(path):
+                if _taken_key(item) != key:
+                    continue
+                if item.get("paper_intent_id") and row.get("paper_intent_id") and item["paper_intent_id"] != row["paper_intent_id"]:
+                    raise ValueError("Conflicting intent for an existing taken entry")
+                durable_sync(fd)
+                return
         if size and os.pread(fd, 1, size - 1) != b"\n":
             line = b"\n" + line
         view, written = memoryview(line), 0
@@ -109,6 +122,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 def record_taken_evidence(taken: Sequence[Mapping[str, Any]], *, as_of: str) -> None:
     """Freeze the point-in-time evidence for every paper fill."""
     for row in taken:
+        decision_id = str(row.get("paper_decision_id") or "")
         _append_jsonl(taken_path(), {
             "recorded_at": datetime.now(timezone.utc).isoformat(),
             "as_of": as_of,
@@ -130,9 +144,59 @@ def record_taken_evidence(taken: Sequence[Mapping[str, Any]], *, as_of: str) -> 
             "entry_quality": row.get("entry_quality") or "",
             "execution_reality_shadow": row.get("execution_reality_shadow"),
             "why": row.get("why") or {},
-            "paper_decision_id": str(row.get("paper_decision_id") or ""),
+            "paper_decision_id": decision_id,
+            "paper_intent_id": str(row.get("paper_intent_id") or ""),
+            "recovered_from_intent": bool(row.get("recovered_from_intent")),
             "entry_date": str(row.get("entry_date") or as_of or "")[:10],
         })
+
+
+def recover_taken_entries(book, events, *, as_of: str) -> int:
+    """Replay missing entry effects from exact durable book and intent lineage."""
+    from product.conditional_evidence import parse_context
+
+    end = date.fromisoformat(as_of)
+    first = (end - timedelta(days=LATER_ENTRY_VERIFY_MAX_DAYS)).isoformat()
+    eligible = [trade for trade in [*book.open.values(), *book.closed]
+                if first <= trade.entry_date <= as_of and trade.decision_id and trade.paper_intent_id]
+    if not eligible:
+        return 0
+    path = taken_path()
+    known = {_taken_key(row): row.get("paper_intent_id") for row in _read_jsonl(path) if row.get("paper_decision_id")}
+    if known:
+        # A line can be visible even if the preceding append's sync failed.
+        from core.atomic_io import durable_sync
+        with path.open("rb") as saved:
+            durable_sync(saved.fileno())
+    intents = {intent.record_id: intent for intent in events.of_type("TradeIntent")}
+    recovered = 0
+    for trade in sorted(eligible, key=lambda trade: (trade.entry_date, trade.paper_intent_id)):
+        intent = intents.get(trade.paper_intent_id)
+        if (intent is None or intent.source != "selection_authority" or not intent.reasons
+                or (intent.symbol, intent.strategy_id, intent.decision_id, intent.event_ts[:10])
+                != (trade.symbol, trade.strategy_id, trade.decision_id, trade.entry_date)
+                or intent.context_key != trade.context_key):
+            continue
+        key = (trade.decision_id, trade.symbol, trade.entry_date)
+        if key in known and known[key] not in (None, "", intent.record_id):
+            raise ValueError("Committed fill conflicts with recorded taken intent")
+        credit = note_later_entry(trade.symbol, as_of=trade.entry_date)
+        if credit.get("errors"):
+            raise RuntimeError("Recovered fill has pending GOOD_WAIT credit")
+        if key in known:
+            continue
+        context = parse_context(intent.context_key)
+        record_taken_evidence([{
+            "symbol": trade.symbol, "setup_label": context.get("setup"),
+            "entry": intent.intended_entry, "entry_fill": trade.entry_price,
+            "stop": trade.stop_price, "target": intent.target_price, "qty": trade.qty,
+            "reason_code": intent.reasons[0],
+            "paper_decision_id": trade.decision_id, "paper_intent_id": trade.paper_intent_id,
+            "recovered_from_intent": True,
+        }], as_of=trade.entry_date)
+        known[key] = intent.record_id
+        recovered += 1
+    return recovered
 
 
 def _trade_key(trade: Mapping[str, Any]) -> str:
@@ -156,7 +220,8 @@ def _lookup_taken(symbol: str, *, decision_id: str = "", entry_date: str = "") -
     rows = [r for r in _read_jsonl(taken_path()) if str(r.get("symbol") or "").upper() == symbol]
     if decision_id:
         for row in reversed(rows):
-            if str(row.get("paper_decision_id") or "") == str(decision_id):
+            if (str(row.get("paper_decision_id") or "") == str(decision_id)
+                    and (not entry_date or str(row.get("entry_date") or row.get("as_of") or "")[:10] == entry_date[:10])):
                 return row
     if entry_date:
         day = str(entry_date)[:10]

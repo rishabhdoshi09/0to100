@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import threading
 import time
+import json
 from dataclasses import dataclass, field
+from hashlib import sha256
+from pathlib import Path
 
 from research.auto_research.loop import run_cycle, CycleReport, canonical_readiness
 from research.auto_research.learning import LearningLedger
@@ -27,6 +30,23 @@ from research.auto_research.thread import ResearchThread
 from research.strategy_studio import discovery as DISC
 from research.strategy_studio import spec as S
 from core.runtime_paths import logs_dir, logs_path
+
+
+def _paper_book_hash(payload):
+    return sha256(json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
+
+
+def load_committed_paper_book(path):
+    """Read a durable book snapshot for evidence replay without observing live mutations."""
+    from research.auto_research.paper_book import PaperBook
+
+    payload = json.loads(Path(path).read_bytes())
+    marker = payload.pop("_runtime_commit", {})
+    if marker.get("book_sha256") != _paper_book_hash(payload):
+        raise ValueError("Persisted paper book checksum missing or invalid")
+    book = PaperBook()
+    book.restore(payload, strict=True)
+    return book
 
 
 @dataclass
@@ -116,11 +136,8 @@ class AutoResearchBrain:
                     marker = dict(book_snapshot.get("_runtime_commit") or {})
                     expected_hash = str(marker.get("book_sha256") or "")
                     if expected_hash:
-                        import hashlib as _hashlib
                         bare_book = {k: v for k, v in book_snapshot.items() if k != "_runtime_commit"}
-                        actual_hash = _hashlib.sha256(
-                            _json.dumps(bare_book, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
-                        ).hexdigest()
+                        actual_hash = _paper_book_hash(bare_book)
                         if actual_hash != expected_hash:
                             raise ValueError("persisted paper book checksum mismatch")
                     elif self.runtime_state.completed_cycles:
@@ -258,10 +275,7 @@ class AutoResearchBrain:
             p = _P(self.intel_book_path); p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_name(f".{p.name}.{_os.getpid()}.tmp")
             payload = self.intel_book.snapshot()
-            import hashlib as _hashlib
-            book_hash = _hashlib.sha256(
-                _json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            book_hash = _paper_book_hash(payload)
             payload["_runtime_commit"] = {
                 "last_completed_cycle": str(self.runtime_state.last_completed_cycle or ""),
                 "completed_cycle_count": len(self.runtime_state.completed_cycles),

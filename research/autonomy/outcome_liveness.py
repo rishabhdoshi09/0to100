@@ -369,17 +369,30 @@ def _resolve_outcomes_light(self, session_date: str, capability_failures=()):
     if result.get("status") != "EOD_SETTLED":
         return result
 
+    learning_book = brain.intel_book
+    if production:
+        try:
+            from product.paper_learning_loop import recover_taken_entries
+
+            learning_book = scheduler.load_committed_paper_book(brain.intel_book_path)
+            result["recovered_taken_entries"] = recover_taken_entries(
+                learning_book, brain.event_store, as_of=str(session_date)[:10])
+        except Exception as exc:
+            result["status"] = "SETTLEMENT_INCOMPLETE"
+            result.setdefault("warnings", []).append(f"Taken-entry recovery failed: {exc}"[:240])
+            return result
+
     try:
         from product.paper_learning_loop import ingest_closed_book
 
-        result["paper_learning"] = ingest_closed_book(brain.intel_book)
+        result["paper_learning"] = ingest_closed_book(learning_book)
     except Exception as exc:
         result["paper_learning"] = {"error": str(exc)[:200]}
 
     try:
         from product.forward_soak import settle_and_report
 
-        result["forward_soak"] = settle_and_report(str(session_date), book=brain.intel_book)
+        result["forward_soak"] = settle_and_report(str(session_date), book=learning_book)
     except Exception as exc:
         result["forward_soak"] = {"error": str(exc)[:200]}
 

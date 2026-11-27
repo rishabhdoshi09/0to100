@@ -119,6 +119,53 @@ def test_research_simulator_positions_carry_no_linkage():
     assert position.context_key == ""
 
 
+def test_committed_entry_recovers_taken_evidence_after_interrupted_write(tmp_path, monkeypatch):
+    import json
+    from product import paper_learning_loop as learning
+    from research.auto_research.scheduler import _paper_book_hash, load_committed_paper_book
+    from research.intelligence.event_store import EventStore
+
+    intent = _intent_for(AutopilotDecision("INFY", "ENTER_NOW", "ELIGIBLE", "ok", _card()),
+                         as_of="2026-09-12", snapshot_id="recovery")
+    events = EventStore(tmp_path / "events.jsonl")
+    events.append(intent)
+    book = PaperBook()
+    assert book.open_intent(intent, date="2026-09-12")
+    assert book.open_position("legacy", "RPEL", 100, 95, 115, "2026-09-12", 10)
+    payload = book.snapshot()
+    payload["_runtime_commit"] = {"book_sha256": _paper_book_hash(payload)}
+    path = tmp_path / "book.json"
+    path.write_text(json.dumps(payload))
+    committed = load_committed_paper_book(path)
+
+    credit = []
+    def record_credit(symbol, *, as_of):
+        credit.append((symbol, as_of))
+        return {}
+
+    def interrupted(*args, **kwargs):
+        raise OSError("injected taken ledger write failure")
+
+    monkeypatch.setattr(learning._core, "note_later_entry", record_credit)
+    with monkeypatch.context() as patch:
+        patch.setattr(learning._core, "_append_jsonl", interrupted)
+        with pytest.raises(OSError, match="injected taken ledger write failure"):
+            learning.recover_taken_entries(committed, events, as_of="2026-09-13")
+    assert learning.recover_taken_entries(committed, events, as_of="2026-09-13") == 1
+    assert learning.recover_taken_entries(committed, events, as_of="2026-09-13") == 0
+    rows = learning._read_jsonl(learning.taken_path())
+    assert len(rows) == 1 and rows[0]["paper_intent_id"] == intent.record_id
+    assert rows[0]["recovered_from_intent"] is True
+    assert credit == [("INFY", "2026-09-12")] * 3
+    with pytest.raises(ValueError, match="Conflicting intent"):
+        learning.record_taken_evidence([{**rows[0], "paper_intent_id": "other-intent"}], as_of="2026-09-12")
+
+    payload["capital"] += 1
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="checksum"):
+        load_committed_paper_book(path)
+
+
 # ── settlement ─────────────────────────────────────────────────────────────
 def _closed_row(**overrides):
     row = {

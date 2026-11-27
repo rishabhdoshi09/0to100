@@ -76,6 +76,54 @@ def test_observations_are_censored_and_committed_with_outcomes(tmp_path):
     assert outcome["close_return"] is None
 
 
+def test_incremental_observations_match_clean_after_backfill_and_extension():
+    from scan.signal_backtest import GRID_SESSION_ANCHORED, _run_backtest_inner
+
+    dates = pd.bdate_range("2024-01-01", periods=230)
+    days = list(dates.strftime("%Y-%m-%d"))
+    archives = {day: day for day in days[:-1]}
+    scanned = []
+
+    class Scanner:
+        def _analyze(self, symbol, frame):
+            scanned.append((symbol, frame.index[-1].strftime("%Y-%m-%d")))
+            return SimpleNamespace(entry=100, stop=98, target=106,
+                                   signals=["setup"], score=20, verdict="WATCH")
+
+    def replay(db, end, symbols, gap=None):
+        prefix = days[:end + 1]
+        digests = {day: None if day == gap else archives[day] for day in prefix[:-1]}
+        binding = dict(exploratory=True, observations=True, symbols=symbols,
+                       sessions=prefix, archive_sha256=digests)
+        run = GeometryRun(db, cutoff=days[140], end=days[end], binding=binding)
+        run.scoped_sessions = {day: i for i, day in enumerate(prefix)}
+        index = dates[:end]
+        if gap:
+            index = index[index != pd.Timestamp(gap)]
+        frame = pd.DataFrame({"open": 101., "high": 106., "low": 98., "close": 103.,
+                              "volume": 500_000.}, index=index)
+        run.scoped_frames = dict.fromkeys(symbols, frame)
+        _run_backtest_inner(Scanner(), {}, symbols, 5, len(days), MAX_HORIZON, 0,
+                            decision_grid=GRID_SESSION_ANCHORED, geometry=run)
+        return run
+
+    incremental = sqlite3.connect(":memory:")
+    clean = sqlite3.connect(":memory:")
+    old = replay(incremental, 195, ["TCS"], gap=days[125])
+    scanned.clear()
+    replay(incremental, 195, ["INFY", "TCS"], gap=days[125])
+    assert scanned and {symbol for symbol, _ in scanned} == {"INFY"}
+    scanned.clear()
+    replay(incremental, 229, ["INFY", "TCS"])
+    assert scanned and min(day for _, day in scanned) >= days[125 - MAX_HORIZON]
+    with pytest.raises(ValueError, match="scope changed"):
+        old.report(["TCS"], old.scoped_sessions)
+    replay(clean, 229, ["INFY", "TCS"])
+    for table in ("geometry_observations", "geometry_outcomes"):
+        query = f"SELECT * FROM {table} ORDER BY 1,2,3,4"
+        assert incremental.execute(query).fetchall() == clean.execute(query).fetchall()
+
+
 
 def test_frozen_snapshot_cache_survives_a_failed_read(tmp_path, monkeypatch):
     from data import bhavcopy_store

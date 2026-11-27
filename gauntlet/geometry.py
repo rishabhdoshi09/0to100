@@ -48,12 +48,11 @@ class GeometryRun:
         self.scoped_frames = None
         self.exploratory = bool(binding.get("exploratory"))
         self.observations = bool(binding.get("observations"))
-        config = json.dumps([self.cutoff, self.end, GRID, BREAKEVEN_TRIGGER_PCT, binding], sort_keys=True)
+        self.config = json.dumps([self.cutoff, self.end, GRID, BREAKEVEN_TRIGGER_PCT, binding], sort_keys=True)
         with db:
             db.execute("CREATE TABLE IF NOT EXISTS geometry_config (id INTEGER PRIMARY KEY, spec TEXT)")
-            db.execute("INSERT OR IGNORE INTO geometry_config VALUES (1, ?)", (config,))
-            if db.execute("SELECT spec FROM geometry_config WHERE id=1").fetchone()[0] != config:
-                raise ValueError("Checkpoint belongs to a different snapshot or experiment")
+            db.execute("INSERT OR IGNORE INTO geometry_config VALUES (1, ?)", (self.config,))
+            previous = db.execute("SELECT spec FROM geometry_config WHERE id=1").fetchone()[0]
             db.execute("CREATE TABLE IF NOT EXISTS geometry_done (symbol TEXT PRIMARY KEY)")
             db.execute("CREATE TABLE IF NOT EXISTS geometry_validation (id INTEGER PRIMARY KEY, report TEXT)")
             db.execute("""
@@ -65,6 +64,10 @@ class GeometryRun:
             columns = {row[1] for row in db.execute("PRAGMA table_info(geometry_outcomes)")}
             if "exit_day" not in columns:
                 db.execute("ALTER TABLE geometry_outcomes ADD COLUMN exit_day TEXT")
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS geometry_by_split_variant
+                ON geometry_outcomes (split, variant, day, symbol)
+            """)
             if self.observations:
                 db.execute("""
                     CREATE TABLE IF NOT EXISTS geometry_observations (
@@ -72,6 +75,49 @@ class GeometryRun:
                         outcome TEXT NOT NULL, PRIMARY KEY (symbol, day)
                     ) WITHOUT ROWID
                 """)
+                db.execute("CREATE TABLE IF NOT EXISTS geometry_resume (symbol TEXT PRIMARY KEY, first_day TEXT NOT NULL)")
+            if previous != self.config:
+                self._extend(previous)
+
+    def _extend(self, previous):
+        cutoff, end, grid, breakeven, old = json.loads(previous)
+        new_cutoff, new_end, new_grid, new_breakeven, new = json.loads(self.config)
+        mutable = {"symbols", "sessions", "archive_sha256"}
+        compatible = (
+            self.observations and old.get("observations") and old.get("exploratory")
+            and (cutoff, grid, breakeven) == (new_cutoff, new_grid, new_breakeven) and new_end >= end
+            and {k: v for k, v in old.items() if k not in mutable}
+            == {k: v for k, v in new.items() if k not in mutable}
+            and mutable <= old.keys() and mutable <= new.keys()
+            and set(old["symbols"]) <= set(new["symbols"])
+            and old["sessions"][:-1] == new["sessions"][:len(old["sessions"]) - 1]
+        )
+        if not compatible or any(new["archive_sha256"].get(day) != digest and digest is not None
+                                 for day, digest in old["archive_sha256"].items()):
+            raise ValueError("Checkpoint belongs to a different snapshot or experiment")
+        done = {row[0] for row in self.db.execute("SELECT symbol FROM geometry_done")}
+        if done != set(old["symbols"]):
+            raise ValueError("Complete the previous checkpoint scope before extending it")
+
+        changed = [i for i, day in enumerate(old["sessions"][:-1])
+                   if old["archive_sha256"][day] != new["archive_sha256"][day]]
+        if new_end > end:
+            changed.append(len(old["sessions"]) - 1)
+        if changed:
+            affected = new["sessions"][max(0, min(changed) - MAX_HORIZON)]
+            self.db.execute("DELETE FROM geometry_outcomes WHERE day >= ?", (affected,))
+            self.db.execute("DELETE FROM geometry_observations WHERE day >= ?", (affected,))
+            self.db.executemany("INSERT OR REPLACE INTO geometry_resume VALUES (?, ?)",
+                                ((symbol, affected) for symbol in done))
+            self.db.execute("DELETE FROM geometry_done")
+        self.db.execute("DELETE FROM geometry_validation")
+        self.db.execute("UPDATE geometry_config SET spec=? WHERE id=1", (self.config,))
+
+    def resume_day(self, symbol):
+        if not self.observations:
+            return ""
+        row = self.db.execute("SELECT first_day FROM geometry_resume WHERE symbol=?", (symbol,)).fetchone()
+        return row[0] if row else ""
 
     def validate_once(self, validate):
         """Reuse the successful preflight for the exact bound snapshot."""
@@ -81,8 +127,10 @@ class GeometryRun:
         report = validate()
         if report["ok"]:
             with self.db:
-                self.db.execute("INSERT OR IGNORE INTO geometry_validation VALUES (1, ?)",
-                                (json.dumps(report, sort_keys=True),))
+                self.db.execute("""
+                    INSERT OR IGNORE INTO geometry_validation SELECT 1, ?
+                    WHERE (SELECT spec FROM geometry_config WHERE id=1)=?
+                """, (json.dumps(report, sort_keys=True), self.config))
         return report
 
     def completed(self, symbol):
@@ -91,13 +139,17 @@ class GeometryRun:
     def save(self, symbol, rows, observations=()):
         # Commit a complete symbol once, even if two workers overlap.
         with self.db:
-            inserted = self.db.execute("INSERT OR IGNORE INTO geometry_done VALUES (?)", (symbol,))
+            inserted = self.db.execute("""
+                INSERT OR IGNORE INTO geometry_done SELECT ?
+                WHERE (SELECT spec FROM geometry_config WHERE id=1)=?
+            """, (symbol, self.config))
             if inserted.rowcount:
                 self.db.executemany("INSERT INTO geometry_outcomes VALUES (?,?,?,?,?,?,?,?,?)",
                                     ((symbol, *row) for row in rows))
                 if self.observations:
                     self.db.executemany("INSERT INTO geometry_observations VALUES (?,?,?,?)",
                                         ((symbol, *row) for row in observations))
+                    self.db.execute("DELETE FROM geometry_resume WHERE symbol=?", (symbol,))
 
     @staticmethod
     def observe(day, history, forward, setup):
@@ -245,11 +297,15 @@ class GeometryRun:
         return result
 
     def report(self, symbols, official_index):
+        if self.db.in_transaction:
+            return self._report(symbols, official_index)
         with self.db:
-            self.db.execute("""
-                CREATE INDEX IF NOT EXISTS geometry_by_split_variant
-                ON geometry_outcomes (split, variant, day, symbol)
-            """)
+            self.db.execute("BEGIN")
+            return self._report(symbols, official_index)
+
+    def _report(self, symbols, official_index):
+        if self.db.execute("SELECT spec FROM geometry_config WHERE id=1").fetchone()[0] != self.config:
+            raise ValueError("Checkpoint scope changed before reporting")
         development = {v: self._summary("development", v) for v in GRID}
         eligible = [v for v, s in development.items() if s["filled"] >= 100 and s["sessions"] >= 25]
         selected = max(eligible, key=lambda v: development[v]["net_return_pct_per_resolved_setup"],
@@ -502,6 +558,8 @@ def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root, observations=Fa
         geometry.scoped_sessions = sessions
         pending = [symbol for symbol in symbols if not geometry.completed(symbol)]
         reused = len(symbols) - len(pending)
+        reused_observations = (db.execute("SELECT count(*) FROM geometry_observations").fetchone()[0]
+                               if observations else None)
         pending = pending[:max_symbols]
         geometry.scoped_frames = {}
 
@@ -519,6 +577,7 @@ def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root, observations=Fa
             scanner = UnifiedScanner(evidence_gate=False, calibration_snapshot={"multipliers": {}})
             _run_backtest_inner(scanner, {}, pending, sample_step, len(days), MAX_HORIZON, 0,
                                 decision_grid=GRID_SESSION_ANCHORED, geometry=geometry)
+        db.execute("BEGIN")
         completed = sum(geometry.completed(symbol) for symbol in symbols)
         observation_count, observation_symbols = (db.execute(
             "SELECT count(*), count(DISTINCT symbol) FROM geometry_observations"
@@ -528,6 +587,7 @@ def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root, observations=Fa
                 "checkpoint_progress": {"reused_symbols": reused, "completed_symbols": completed,
                                         "pending_symbols": len(symbols) - completed,
                                         "observations": observation_count,
+                                        "reused_observations": reused_observations,
                                         "symbols_with_observations": observation_symbols},
                 "research_start": start, "stock_scope": symbols,
                 "selection_bias": ("Manually named stock cohort. Censored windows and uninterrupted EQ warm-up "

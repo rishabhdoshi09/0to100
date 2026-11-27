@@ -1051,6 +1051,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         symbol_used = False
         geometry_rows = []
         geometry_observations = []
+        resume_day = geometry.resume_day(sym) if geometry is not None else ""
         anchored = decision_grid == GRID_SESSION_ANCHORED
         last_t = n + 1 if geometry is not None else n if official_index else n - horizon
         segment_start = 0
@@ -1060,6 +1061,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             if geometry is not None and geometry.scoped_sessions is not None else None
         )
         for t in range(start, last_t, 1 if anchored else sample_step):
+            if resume_day and day_keys[t - 1] < resume_day:
+                continue
             if segment_starts is not None:
                 segment_start = int(segment_starts[t - 1])
                 if t - segment_start < 60:

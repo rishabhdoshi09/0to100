@@ -25,9 +25,12 @@ def main():
         if len(spec['symbols']) != db.execute('SELECT count(*) FROM geometry_done').fetchone()[0]:
             raise ValueError("Finish all symbol batches before scoring the study")
         data = pd.read_sql_query('''
-            SELECT f.*, g.outcome AS exit, g.net_r, g.net_pct, g.holding
+            SELECT f.*, g.outcome AS exit, g.net_r, g.net_pct, g.holding,
+                   longer.net_pct AS longer_net_pct, longer.outcome AS longer_exit
             FROM geometry_observations f LEFT JOIN geometry_outcomes g
             ON f.symbol=g.symbol AND f.day=g.day AND g.variant='scanner'
+            LEFT JOIN geometry_outcomes longer
+            ON f.symbol=longer.symbol AND f.day=longer.day AND longer.variant='long'
             ORDER BY f.day,f.symbol
         ''',db)
     dates = {d:i for i,d in enumerate(spec['sessions'])}
@@ -39,6 +42,7 @@ def main():
     data['positive'] = data.net_r.gt(0).astype(int)
     data['label'] = data.exit.map({'WIN':0,'TARGET_GAP_SCRATCH':0,'LOSS':1,'SCRATCH':1,'FLAT':2})
     data['setup_payoff'] = data.net_pct.where(data.exit.ne('NO_FILL'), 0.)
+    data['entry_label'] = data.label.notna().astype(float).where(data.setup_payoff.notna())
     keys = ['score','momentum_20','volatility_20','log_turnover']
     horizon = max(x[3] for x in grid.values())
 
@@ -61,6 +65,27 @@ def main():
     rank_spread = (rank_means[True] - rank_means[False]).dropna()
     attribution['rank_top_five'] = {'paired_dates':len(rank_spread),
                                     'mean_spread_pct':100*float(rank_spread.mean()) if len(rank_spread) else None, 'inference':infer(rank_spread)}
+    # Sessionwise ranks avoid conflating market drift with stock ordering.
+    ranked = ranked.dropna(subset=['open_to_close_return']).copy()
+    by_day = ranked.groupby('day')
+    rank_correlations = by_day.apply(
+        lambda frame: frame.score.rank().corr(frame.open_to_close_return.rank()),
+        include_groups=False,
+    ).dropna()
+    ranked['score_quintile'] = np.minimum((by_day.score.rank(pct=True) * 5).apply(np.ceil), 5).astype(int)
+    attribution['score_rank_correlation'] = infer(rank_correlations)
+    attribution['score_quintiles'] = {
+        int(q): {'n': len(group), 'mean_pct': float(group.open_to_close_return.mean()) * 100,
+                 'p10_pct': float(group.open_to_close_return.quantile(.1)) * 100,
+                 'p90_pct': float(group.open_to_close_return.quantile(.9)) * 100}
+        for q, group in ranked.groupby('score_quintile')
+    }
+    execution_groups = eligible[eligible.flagged & eligible.exit.isin(['LOSS', 'WIN', 'FLAT', 'SCRATCH', 'TARGET_GAP_SCRATCH', 'NO_FILL'])]
+    group_means = execution_groups.groupby(['day', 'buy']).setup_payoff.mean().unstack().reindex(columns=[False, True])
+    attribution['buy_vs_rejected_setups_net_pct'] = infer((group_means[True] - group_means[False]).dropna())
+    paired_geometry = execution_groups.dropna(subset=['net_pct', 'longer_net_pct'])
+    attribution['long_minus_scanner_on_paired_fills_pct'] = infer(pd.Series(
+        (paired_geometry.longer_net_pct - paired_geometry.net_pct).to_numpy(), index=paired_geometry.day))
     buy = data[data.buy & data.net_r.notna()]
     execution = dict(fills=len(buy), mean_net_r=float(buy.net_r.mean()), mean_net_pct=float(buy.net_pct.mean()),
                      mean_gross_pct=float(buy.net_pct.mean()+spec['cnc_cost_pct']),
@@ -116,10 +141,11 @@ def main():
         if test.empty: continue
         for mode,learn in [('frozen',frozen),('adaptive',train)]:
             fills=learn[learn.label.notna()]
-            for name,field,n in [('exit','label',3),('positive','positive',2)]:
+            for name,field,n in [('exit','label',3),('positive','positive',2),('entry','entry_label',2)]:
                 sample=fills if name=='positive' else learn
                 p=forecasts(sample,test,field,n)
-                prior=(np.bincount(fills[field].astype(int),minlength=n)+.5)/(len(fills)+n*.5)
+                observed = sample[field].dropna().astype(int)
+                prior=(np.bincount(observed,minlength=n)+.5)/(len(observed)+n*.5)
                 for i in range(n):
                     test[f'{mode}_{name}{i}']=p[:,i]
                     test[f'{mode}_{name}_prior{i}']=prior[i]
@@ -130,10 +156,11 @@ def main():
     models={}
     for mode in ('frozen','adaptive'):
         models[mode]={}
-        for name,field,n in [('exit','label',3),('positive','positive',2)]:
+        for name,field,n in [('exit','label',3),('positive','positive',2),('entry','entry_label',2)]:
+            evaluated = evals[evals.entry_label.notna()] if name == 'entry' else filled
             for suffix in ('','_prior'):
-                prob=filled[[f'{mode}_{name}{suffix}{i}' for i in range(n)]].to_numpy()
-                models[mode][name+suffix]=scores(prob,filled[field].astype(int).to_numpy())
+                prob=evaluated[[f'{mode}_{name}{suffix}{i}' for i in range(n)]].to_numpy()
+                models[mode][name+suffix]=scores(prob,evaluated[field].astype(int).to_numpy())
         models[mode]['payoff_rmse_pct']=float(np.mean((evals[f'{mode}_payoff']-evals.setup_payoff)**2)**.5)
         baseline_brier = np.sum((filled[[f'{mode}_exit_prior{i}' for i in range(3)]].to_numpy()-np.eye(3)[filled.label.astype(int)])**2,axis=1)
         model_brier = np.sum((filled[[f'{mode}_exit{i}' for i in range(3)]].to_numpy()-np.eye(3)[filled.label.astype(int)])**2,axis=1)
@@ -143,7 +170,9 @@ def main():
         max_dd = 0.0
         periods = censored = 0
         for day,frame in evals[evals.ordinal % horizon == 0].groupby('ordinal'):
-            pick=frame.sort_values([f'{mode}_payoff','symbol'],ascending=[False,True]).head(5)
+            payoff_column = f'{mode}_payoff'
+            pick = (frame[frame[payoff_column] > 0]
+                    .sort_values([payoff_column, 'symbol'], ascending=[False, True]).head(5))
             censored+=int(pick.setup_payoff.isna().sum())
             nav *= 1 + pick.setup_payoff.fillna(-100).sum() / 500
             basket_nav *= 1 + frame.setup_payoff.fillna(-100).mean() * len(pick) / 500
