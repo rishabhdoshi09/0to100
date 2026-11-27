@@ -12,6 +12,7 @@ not add a second execution path: it composes the two existing phases and keeps
 """
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any, Mapping
 
 
@@ -105,13 +106,12 @@ def install_paper_cycle_truth() -> None:
         session_phase="intraday",
         capability_failures=(),
     ):
-        from research.auto_research import scheduler
-
         live = self.live_feed
+        scheduler = import_module("research.auto_research.scheduler")
         brain = scheduler.get_brain()
         # The management-only pass short circuits when the book is empty. New
         # risk must never rely on that pass installing the protected adapter.
-        if brain is scheduler._BRAIN:
+        if brain is getattr(scheduler, "_BRAIN", None):
             from research.auto_research.providers import ensure_production_paper_pipeline
 
             if not ensure_production_paper_pipeline() and entries_allowed:
