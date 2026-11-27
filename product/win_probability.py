@@ -8,13 +8,15 @@ discounted for how far it is from "this trade, now":
   HISTORICAL_REPLAY  point-in-time replay analogs of the same setup      weight 0.5
   LIVE_SIGNALS       tracked outcomes of the same scanner signals        weight 0.5 x age decay
 
-A weak Beta(2, 2) prior keeps an empty evidence set at 50% with a wide range;
-the label says how much evidence actually stands behind the number. Nothing
-here is fitted to price: it only counts what already happened.
+A weak Beta(2, 2) prior regularizes observed frequencies. Without observations
+the API returns UNMEASURED. The pooled sources have different exit rules, so
+the output is a descriptive historical estimate rather than a calibrated
+forecast for this stock and trade plan.
 """
 from __future__ import annotations
 
 from datetime import date
+from math import isfinite
 from typing import Any, Mapping
 
 PRIOR_ALPHA = 2.0
@@ -30,7 +32,8 @@ def _f(value: Any) -> float | None:
     try:
         if value in (None, ""):
             return None
-        return float(value)
+        number = float(value)
+        return number if isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -94,6 +97,8 @@ def estimate_win_probability(
     f_n, f_wins = _f(fw.get("n")), _f(fw.get("wins"))
     if f_n and f_n > 0 and f_wins is not None and 0 <= f_wins <= f_n:
         sources.append({"source": "FORWARD_PAPER", "rate": f_wins / f_n, "n": f_n, "weight": 1.0})
+    else:
+        f_n = None
 
     alpha, beta = PRIOR_ALPHA, PRIOR_BETA
     effective = 0.0
@@ -103,6 +108,13 @@ def estimate_win_probability(
         alpha += pseudo * src["rate"]
         beta += pseudo * (1.0 - src["rate"])
         effective += pseudo
+    definition = "Pooled frequency of positive R under each source's own exit rules"
+    if effective <= 0:
+        return {
+            "p_win": None, "low_80": None, "high_80": None, "effective_n": 0.0,
+            "label": "UNMEASURED", "sources": [], "definition": definition,
+            "text": "Unmeasured · no usable outcome evidence",
+        }
     p = alpha / (alpha + beta)
     low, high = _interval(alpha, beta)
 
@@ -111,10 +123,8 @@ def estimate_win_probability(
         label = "MEASURED"
     elif effective >= 20:
         label = "ESTIMATED"
-    elif effective > 0:
-        label = "THIN"
     else:
-        label = "UNPROVEN"
+        label = "THIN"
     names = {"HISTORICAL_REPLAY": "historical replay", "LIVE_SIGNALS": "tracked signals",
              "FORWARD_PAPER": "forward paper"}
     basis = ", ".join(f"{names[s['source']]} {s['rate']:.0%} (n={s['n']:.0f})" for s in sources)
@@ -125,10 +135,9 @@ def estimate_win_probability(
         "effective_n": round(effective, 1),
         "label": label,
         "sources": sources,
-        "definition": "P(trade closes with R > 0) under each source's own exit rules",
+        "definition": definition,
         "text": (
-            f"Win probability {p:.0%} (80% range {low:.0%}–{high:.0%}) · {label.lower()} · "
-            + (basis if basis else "no evidence yet — prior only")
+            f"Pooled positive-R estimate {p:.0%} (80% range {low:.0%}–{high:.0%}) · {label.lower()} · {basis}"
         ),
     }
 

@@ -6,10 +6,10 @@ from datetime import date
 from product.win_probability import estimate_win_probability, overlay_cards
 
 
-def test_no_evidence_is_the_prior_and_says_so():
+def test_no_evidence_reports_unmeasured_without_a_prior_only_number():
     out = estimate_win_probability()
-    assert out["p_win"] == 0.5 and out["label"] == "UNPROVEN" and "prior only" in out["text"]
-    assert out["low_80"] < 0.5 < out["high_80"]
+    assert out["p_win"] is out["low_80"] is out["high_80"] is None
+    assert out["label"] == "UNMEASURED" and "no usable outcome evidence" in out["text"]
 
 
 def test_replay_and_decayed_live_signals_combine():
@@ -33,7 +33,8 @@ def test_forward_paper_is_the_only_path_to_measured():
     out = estimate_win_probability(forward={"n": 40, "wins": 22})
     assert out["label"] == "MEASURED" and abs(out["p_win"] - 24 / 44) < 1e-3
     assert estimate_win_probability(forward={"n": 10, "wins": 9})["label"] == "THIN"
-    assert estimate_win_probability(forward={"n": 10, "wins": 12})["label"] == "UNPROVEN"   # invalid
+    assert estimate_win_probability(forward={"n": 40, "wins": 42})["label"] == "UNMEASURED"
+    assert estimate_win_probability(forward={"n": float("inf"), "wins": 22})["p_win"] is None
 
 
 def test_overlay_joins_replay_evidence_by_symbol(monkeypatch):

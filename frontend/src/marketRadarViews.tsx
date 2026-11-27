@@ -642,7 +642,7 @@ function HomeOsCard({
                 {' '}Target {row.target != null ? money(row.target, 2) : '—'}
               </small>
               <small>
-                Profit probability {row.win_probability?.p_win != null && (Number(row.win_probability.effective_n) > 0)
+                Pooled profit estimate {row.win_probability?.p_win != null && (Number(row.win_probability.effective_n) > 0)
                   ? `${Math.round(row.win_probability.p_win * 100)}% · ${row.win_probability.label || 'research estimate'}`
                   : 'unmeasured'} ·
                 {' '}Hold {row.holding_limit_sessions != null ? `up to ${row.holding_limit_sessions} sessions` : 'unmeasured'} ·

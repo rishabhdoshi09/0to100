@@ -38,7 +38,9 @@ The existing calibration module now scores target-first, stop-first and expiry t
 | Delivery confirmation | 35 / 7 | 0.487 / 0.510 | 1.047 / 1.081 |
 | Downside resilience | 35 / 7 | 0.548 / 0.562 | 0.946 / 1.135 |
 
-Scores are descriptive, with one reliability point per class and only seven later cycles. Across same-date holdings the effective sample cannot be inferred from trade counts. Neither pooled improvement nor the risk ranking establishes stock-specific calibration or improves net expectancy. No user-facing probability is changed.
+Scores are descriptive, with one reliability point per class and only seven later cycles. Across same-date holdings the effective sample cannot be inferred from trade counts. Neither pooled improvement nor the risk ranking establishes stock-specific calibration or improves net expectancy. The discovery estimates stay offline.
+
+Recommendation probability displays now return UNMEASURED when no usable outcomes exist. The previous no-data response exposed a 50% prior as a number in the detail view. Measured sources are described as pooled outcome evidence. Historical price-path simulations are identified separately and their barrier frequencies are no longer compared directly with positive-R frequencies. The persisted-first recommendation route retains its existing background rebuild. This pass establishes no new latency baseline, and production dashboard performance is blocked by the host state.
 
 ## Protected paper execution and learning
 

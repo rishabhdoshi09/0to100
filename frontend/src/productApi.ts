@@ -2392,13 +2392,13 @@ export const fetchEvolutionLab = (domain = 'EQUITY'): Promise<EvolutionLabBoard>
   })
 
 
-/** Beta-posterior P(trade closes with R > 0) from replay, tracked signals and forward paper. */
+/** Pooled positive-R outcome estimate across sources with different exit rules. */
 export type WinProbability = {
-  p_win?: number
-  low_80?: number
-  high_80?: number
+  p_win?: number | null
+  low_80?: number | null
+  high_80?: number | null
   effective_n?: number
-  label?: 'MEASURED' | 'ESTIMATED' | 'THIN' | 'UNPROVEN' | string
+  label?: 'MEASURED' | 'ESTIMATED' | 'THIN' | 'UNMEASURED' | string
   text?: string
 }
 

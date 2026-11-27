@@ -129,7 +129,7 @@ function CardTile({
             <span>Stop</span>
             <strong>{card.stop != null ? money(card.stop, 2) : '—'}</strong>
           </div>
-          <div><span>Profit probability</span><strong>
+          <div><span>Pooled profit estimate</span><strong>
             {card.win_probability?.p_win != null && (Number(card.win_probability.effective_n) > 0)
               ? `${Math.round(card.win_probability.p_win * 100)}% · ${card.win_probability.label || 'estimated'}`
               : 'Unmeasured'}
@@ -208,19 +208,19 @@ function PlanOddsPanel({ symbol, entry, stop, target }: { symbol: string; entry:
   const horizon = odds.horizon_sessions ?? 15
   return (
     <div className="reco-pick-note" data-testid="plan-odds">
-      <strong>Odds for this plan</strong> ({horizon} sessions, no edge assumed):{' '}
+      <strong>Historical path simulation</strong> ({horizon} sessions, no edge assumed):{' '}
       target first <strong>{oddsPct(odds.p_target_first)}</strong> · stop first {oddsPct(odds.p_stop_first)} ·
-      neither {oddsPct(odds.p_neither)} · breakeven needs {oddsPct(odds.breakeven_win_rate)} at {odds.reward_risk?.toFixed(2)}R
+      neither {oddsPct(odds.p_neither)} · binary gross breakeven {oddsPct(odds.breakeven_win_rate)} at {odds.reward_risk?.toFixed(2)}R
       {(odds.cone || []).length ? (
         <div>
-          Likely range:{' '}
+          Resampled price range{' '}
           {(odds.cone || []).map((c) => (
             <span key={c.sessions}>{c.sessions}d {signed(c.p10_pct)} … {signed(c.p50_pct)} … {signed(c.p90_pct)}{c.sessions < horizon ? ' · ' : ''}</span>
           ))}
           {' '}(10th / median / 90th percentile)
         </div>
       ) : null}
-      <small>{odds.method} A real edge shows up only when the evidence-based win rate beats the target-first odds.</small>
+      <small>{odds.method} Calibrated target, stop and expiry probabilities are unmeasured.</small>
     </div>
   )
 }
@@ -346,11 +346,10 @@ function DecisionSheet({
       {card.expected_payoff_detail ? (
         <p className="reco-pick-note">{card.expected_payoff_detail}</p>
       ) : null}
-      {card.win_probability?.text ? (
-        <p className="reco-pick-note" data-testid="win-probability">
-          <strong>Win probability:</strong> {card.win_probability.text.replace(/^Win probability /, '')}
-        </p>
-      ) : null}
+      <p className="reco-pick-note" data-testid="win-probability">
+        {card.win_probability?.text && Number(card.win_probability.effective_n) > 0
+          ? card.win_probability.text : 'Profit probability unmeasured'}
+      </p>
       {card.entry && card.stop && card.target ? (
         <PlanOddsPanel symbol={card.symbol} entry={card.entry} stop={card.stop} target={card.target} />
       ) : null}

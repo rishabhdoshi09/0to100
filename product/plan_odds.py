@@ -1,20 +1,9 @@
-"""Probabilistic view of a trade plan from the stock's own behaviour.
+"""Drift-removed price-path simulation from a stock's recent daily moves.
 
-The owner asked for probabilistic views on recommendations (2026-11-12). The
-evidence-based win probability on a card stays UNPROVEN (50%, 20-80% band)
-until enough comparable outcomes settle, which says nothing about the plan
-itself. This module answers a narrower, honest question:
-
-    Given how THIS stock has actually moved over the last year (its own daily
-    close-to-close, high and low excursions), with NO edge assumed (drift
-    removed), what are the odds that this entry/stop/target plan hits its
-    target before its stop within the horizon -- and where is price likely to
-    be after 5/10/15 sessions?
-
-It is a no-edge baseline, never a forecast. A setup has an edge only when its
-evidence-based win rate beats ``p_target_first`` (and the breakeven rate).
-Paths start at the entry (assumed filled). A day that touches both levels
-counts as stop first, matching the canonical first-touch resolver.
+Simulated barrier frequencies describe the resampled paths. Pooled positive-R
+rates from other trade plans measure a different outcome. The displayed gross
+breakeven rate assumes binary outcomes. Paths start at the entry price and a
+day that touches both levels counts as stop first.
 """
 from __future__ import annotations
 
