@@ -996,16 +996,19 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     confirm_rows: list[dict] = []               # pre-registered feature confirmation (research only)
     combo_stats: dict[str, dict] = {}           # exact signal combination → aggregate
     seen_dates: set[str] = set()                # realised NSE sessions (official bars present)
-    try:
-        # Exact windows are checked against the realised archive sessions PLUS
-        # the verified calendar's sessions in covered years, minus uncovered
-        # future years (core.session_window): a market-wide missing archive
-        # leaves a hole instead of compressing two days into one.
-        from core.session_window import official_session_index
-        from data.bhavcopy_store import _dates_on_disk
-        official_index = official_session_index(d.isoformat() for d in _dates_on_disk())
-    except Exception:
-        official_index = {}
+    if geometry is not None and geometry.scoped_sessions is not None:
+        official_index = geometry.scoped_sessions
+    else:
+        try:
+            # Exact windows are checked against the realised archive sessions PLUS
+            # the verified calendar's sessions in covered years, minus uncovered
+            # future years (core.session_window): a market-wide missing archive
+            # leaves a hole instead of compressing two days into one.
+            from core.session_window import official_session_index
+            from data.bhavcopy_store import _dates_on_disk
+            official_index = official_session_index(d.isoformat() for d in _dates_on_disk())
+        except Exception:
+            official_index = {}
     if geometry is not None and not official_index:
         raise ValueError("Geometry research requires verified NSE sessions")
     horizon_gaps = 0                            # trades whose window is not exactly `horizon` sessions
@@ -1028,7 +1031,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     for si, sym in enumerate(symbols):
         if geometry is not None and geometry.completed(sym):
             continue
-        df = get_ohlcv(sym)
+        df = geometry.scoped_frames.get(sym) if geometry is not None and geometry.scoped_frames is not None else get_ohlcv(sym)
         min_bars = 60 if geometry is not None else 60 + horizon + 20
         if df is None or len(df) < min_bars or not {"high", "low", "close"} <= set(df.columns):
             if geometry is not None:
@@ -1049,7 +1052,17 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         geometry_rows = []
         anchored = decision_grid == GRID_SESSION_ANCHORED
         last_t = n + 1 if geometry is not None else n if official_index else n - horizon
+        segment_start = 0
+        segment_starts = (
+            np.maximum.accumulate(np.where(
+                np.r_[True, np.diff([official_index[day] for day in day_keys]) != 1], np.arange(n), 0))
+            if geometry is not None and geometry.scoped_sessions is not None else None
+        )
         for t in range(start, last_t, 1 if anchored else sample_step):
+            if segment_starts is not None:
+                segment_start = int(segment_starts[t - 1])
+                if t - segment_start < 60:
+                    continue
             if anchored:
                 # The decision day is bar t-1: sampled iff its official ordinal
                 # (else, without an index, its bar position) is on the stride.
@@ -1080,7 +1093,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                     seen_dates.update(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d"))
                 except Exception:
                     seen_dates.update(str(x)[:10] for x in df.index)
-            hist = df.iloc[:t]
+            hist = df.iloc[segment_start:t]
             scale = 1.0
             if geometry is not None:
                 from data.corporate_actions import raw_price_multiplier

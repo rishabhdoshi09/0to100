@@ -25,16 +25,22 @@ def main(argv=None) -> int:
     ap.add_argument("--geometry-checkpoint", type=Path, help="SQLite checkpoint for the local geometry study")
     ap.add_argument("--development-before", help="First date of the untouched evaluation period")
     ap.add_argument("--evaluation-before", help="Exclusive end date of the evaluation period")
+    ap.add_argument("--research-start", help="First archive date for exploratory scoped equity research")
+    ap.add_argument("--stocks", help="Comma-separated, explicitly named operating-company NSE symbols")
     args = ap.parse_args(argv)
     if args.geometry_checkpoint:
         if args.skip_validation or args.factors or not args.development_before or not args.evaluation_before:
             ap.error("geometry requires both date boundaries and dataset validation")
         from gauntlet.geometry import run
 
-        report = run(args.geometry_checkpoint, cutoff=args.development_before, end=args.evaluation_before)
+        if bool(args.research_start) != bool(args.stocks):
+            ap.error("scoped research requires both --research-start and --stocks")
+        report = run(args.geometry_checkpoint, cutoff=args.development_before, end=args.evaluation_before,
+                     research_start=args.research_start,
+                     stocks=args.stocks.split(",") if args.stocks else None)
         print(json.dumps(report, indent=2, allow_nan=False))
         return 2 if report.get("status") == "ABORTED" else 0
-    if args.development_before or args.evaluation_before:
+    if args.development_before or args.evaluation_before or args.research_start or args.stocks:
         ap.error("date boundaries require --geometry-checkpoint")
 
     from gauntlet.runner import run_gauntlet

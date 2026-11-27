@@ -10,7 +10,7 @@ import subprocess
 import sys
 from bisect import bisect_left
 from contextlib import closing
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +43,9 @@ class GeometryRun:
             raise ValueError("Evaluation end must follow the development cutoff")
         self.db = db
         self.boundaries = None
+        self.scoped_sessions = None
+        self.scoped_frames = None
+        self.exploratory = bool(binding.get("exploratory"))
         config = json.dumps([self.cutoff, self.end, GRID, BREAKEVEN_TRIGGER_PCT, binding], sort_keys=True)
         with db:
             db.execute("CREATE TABLE IF NOT EXISTS geometry_config (id INTEGER PRIMARY KEY, spec TEXT)")
@@ -54,9 +57,12 @@ class GeometryRun:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS geometry_outcomes (
                     symbol TEXT, split TEXT, day TEXT, variant TEXT, outcome TEXT,
-                    net_r REAL, net_pct REAL, holding INTEGER
+                    net_r REAL, net_pct REAL, holding INTEGER, exit_day TEXT
                 )
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(geometry_outcomes)")}
+            if "exit_day" not in columns:
+                db.execute("ALTER TABLE geometry_outcomes ADD COLUMN exit_day TEXT")
 
     def validate_once(self, validate):
         """Reuse the successful preflight for the exact bound snapshot."""
@@ -78,7 +84,7 @@ class GeometryRun:
         with self.db:
             inserted = self.db.execute("INSERT OR IGNORE INTO geometry_done VALUES (?)", (symbol,))
             if inserted.rowcount:
-                self.db.executemany("INSERT INTO geometry_outcomes VALUES (?,?,?,?,?,?,?,?)",
+                self.db.executemany("INSERT INTO geometry_outcomes VALUES (?,?,?,?,?,?,?,?,?)",
                                     ((symbol, *row) for row in rows))
 
     @staticmethod
@@ -117,14 +123,14 @@ class GeometryRun:
             stop = min(setup.stop, entry * (1 - stop_floor))
             target = setup.target if target_pct is None else entry * (1 + target_pct)
             if target <= entry:
-                yield split, day, variant, "INVALID", None, None, None
+                yield split, day, variant, "INVALID", None, None, None, None
                 continue
             sim = simulate_trade(entry, stop, target, bars["high"][:horizon], bars["low"][:horizon],
                                  bars["close"][:horizon], opens=bars["open"][:horizon])
             if len(fwd) < horizon and sim.outcome in {"FLAT", "NO_FILL"}:
-                yield split, day, variant, "CENSORED", None, None, None
+                yield split, day, variant, "CENSORED", None, None, None, None
             elif not sim.filled:
-                yield split, day, variant, "NO_FILL", None, None, None
+                yield split, day, variant, "NO_FILL", None, None, None, None
             else:
                 risk_fraction = (sim.fill_price - stop) / sim.fill_price
                 net_r = sim.r - cost_in_r(risk_fraction, "CNC")
@@ -134,7 +140,20 @@ class GeometryRun:
                     # The exit was triggered by the target, even though gross P&L was zero.
                     outcome = "TARGET_GAP_SCRATCH"
                 yield (split, day, variant, outcome, net_r, 100 * net_r * risk_fraction,
-                       1 + sim.exit_offset - sim.entry_offset)
+                       1 + sim.exit_offset - sim.entry_offset,
+                       fwd.index[sim.exit_offset].strftime("%Y-%m-%d"))
+
+    def _drawdown(self, split, variant):
+        equity = peak = drawdown = 0.0
+        for (daily_r,) in self.db.execute("""
+            SELECT sum(net_r) FROM geometry_outcomes
+            WHERE split=? AND variant=? AND net_r IS NOT NULL AND exit_day IS NOT NULL
+            GROUP BY exit_day ORDER BY exit_day
+        """, (split, variant)):
+            equity += daily_r
+            peak = max(peak, equity)
+            drawdown = max(drawdown, peak - equity)
+        return drawdown
 
     def _summary(self, split, variant):
         total, n, wins, censored, net_r, net_pct, holding, sessions, targets, stops, expired = self.db.execute("""
@@ -151,6 +170,7 @@ class GeometryRun:
             "probability_positive_net": (wins + 0.5) / (n + 1) if n else None,
             "mean_net_R": net_r, "mean_net_return_pct": net_pct,
             "mean_holding_sessions": holding,
+            "settled_daily_fixed_risk_max_drawdown_R": self._drawdown(split, variant) if n else None,
             "net_return_pct_per_resolved_setup": (
                 net_pct * n / (total - censored) if n else None
             ),
@@ -246,14 +266,29 @@ class GeometryRun:
                 comparison = {"paired_setups": sum(count for _, _, count in paired),
                               "mean_net_return_pct_difference": bound["expectancy_r_precise"],
                               "lower_95_pct_difference": bound["lower_r"]}
-        return {"evidence": "historical_research", "symbols": len(symbols),
+        return {"evidence": "exploratory_historical_research" if self.exploratory else "historical_research",
+                "symbols": len(symbols),
                 "development_before": self.cutoff, "evaluation_before": self.end,
                 "grid": GRID, "development": development, "selected": selected,
-                "evaluation_policy": "Confirmatory for the development selection only. Other results are diagnostic.",
+                "evaluation_policy": ("Both periods are exploratory. The later period is a temporal split, not unseen evidence."
+                                      if self.exploratory else
+                                      "Confirmatory for the development selection only. Other results are diagnostic."),
+                "drawdown_definition": "Peak-to-trough cumulative realized net R by exit day, with one risk unit per fill. No portfolio or mark-to-market claim.",
                 "evaluation": evaluation, "paired_comparison": comparison}
 
 
-def run(checkpoint: Path, *, cutoff: str, end: str):
+def _code_digest():
+    repo = Path(__file__).resolve().parents[1]
+    code = hashlib.sha256()
+    files = subprocess.check_output(["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=repo)
+    for name in sorted(set(files.decode().split("\0"))):
+        path = repo / name
+        if path.suffix == ".py" and path.is_file():
+            code.update(name.encode() + b"\0" + path.read_bytes())
+    return code.hexdigest()
+
+
+def run(checkpoint: Path, *, cutoff: str, end: str, research_start=None, stocks=None):
     """Resume on a frozen local archive using the existing dataset gate."""
     from core.live_volume import on_live_volume
 
@@ -266,6 +301,9 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
     from core.runtime_paths import logs_dir, logs_path
 
     root_path = Path(root).resolve()
+    if research_start is not None or stocks is not None:
+        return _run_scoped(checkpoint, cutoff=cutoff, end=end, start=research_start, stocks=stocks,
+                           root=root_path)
     metadata = (bhavcopy_store._PKL, index_store._PKL, _events_path(),
                 universe_history_path())
     instrument_names = logs_path("instruments_cache.csv")
@@ -292,13 +330,6 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
 
     # Bind the checkpoint to code (including local edits), runtime dependencies,
     # and the input files rather than trusting the checkpoint's filename.
-    repo = Path(__file__).resolve().parents[1]
-    code = hashlib.sha256()
-    files = subprocess.check_output(["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=repo)
-    for name in sorted(set(files.decode().split("\0"))):
-        path = repo / name
-        if path.suffix == ".py" and path.is_file():
-            code.update(name.encode() + b"\0" + path.read_bytes())
     from core.session_window import official_session_index
 
     inputs = {}
@@ -319,7 +350,7 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
         raise ValueError("Geometry research requires positive delivery trading costs")
     # QT overrides can change the scanner, session handling and execution rules.
     env = json.dumps({k: v for k, v in os.environ.items() if k.startswith("QT_")}, sort_keys=True)
-    binding = {"code": code.hexdigest(), "inputs": inputs, "pandas": pd.__version__,
+    binding = {"code": _code_digest(), "inputs": inputs, "pandas": pd.__version__,
                "numpy": np.__version__, "python": sys.version,
                "env_sha256": hashlib.sha256(env.encode()).hexdigest(),
                "calendar_sha256": hashlib.sha256(json.dumps(sessions, sort_keys=True).encode()).hexdigest(),
@@ -355,3 +386,93 @@ def run(checkpoint: Path, *, cutoff: str, end: str):
                                    5, len(verified_days), MAX_HORIZON, 0,
                                    decision_grid=GRID_SESSION_ANCHORED, geometry=geometry)
         return {**result, "validation": validation, "binding": binding}
+
+
+def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root):
+    from core.runtime_paths import logs_path
+    from data import bhavcopy_store
+    from data.corporate_actions import events_path, load_events
+    from data.nse_universe import _is_non_stock_fund
+    from gauntlet.validator import scoped_equity_frames
+    from research.intelligence.data.nse_calendar import (
+        MANIFEST_PATH, covered_years, documented_special_sessions, is_session, load_holidays, load_manifest,
+    )
+    from scan.signal_backtest import GRID_SESSION_ANCHORED, _run_backtest_inner
+    from scan.unified_scanner import UnifiedScanner
+
+    first, split, last = map(date.fromisoformat, (start, cutoff, end))
+    if not first < split < last <= date.today():
+        raise ValueError("Use ordered historical start, split and end dates")
+    symbols = sorted({symbol.strip().upper() for symbol in stocks if symbol.strip()})
+    if not symbols or any(_is_non_stock_fund(symbol) for symbol in symbols):
+        raise ValueError("Supply explicit operating-company NSE symbols")
+    action_path = events_path().resolve()
+    archive_dir = bhavcopy_store._BHAV_DIR.resolve()
+    if not all(path.is_relative_to(root) for path in (action_path, archive_dir)) or not action_path.is_file():
+        raise ValueError("Scoped research requires isolated archive and corporate-action inputs")
+    action_bytes = action_path.read_bytes()
+    actions = load_events(action_path)
+    if not actions or action_bytes != action_path.read_bytes():
+        raise ValueError("Scoped research requires a valid, frozen corporate-action ledger")
+    research_manifest = logs_path("nse_calendar_manifest.json")
+    if any(not path.resolve().is_relative_to(root)
+           for path in (research_manifest, logs_path("nse_holidays.json"))):
+        raise ValueError("The research calendar must stay inside the isolated runtime")
+    manifest = load_manifest(research_manifest) if research_manifest.exists() else load_manifest(MANIFEST_PATH)
+    holidays = load_holidays()
+    if not set(range(first.year, last.year + 1)) <= covered_years(holidays, manifest):
+        raise ValueError("Every year in the scoped window must have verified NSE calendar coverage")
+    special_sessions = documented_special_sessions(manifest)
+    days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
+    expected = [day for day in days if day < last
+                and (is_session(day, holidays) or day.isoformat() in special_sessions)]
+    archives = {}
+    digests = {}
+    for day in expected:
+        path = bhavcopy_store._day_path(day)
+        if not path.resolve().is_relative_to(archive_dir):
+            raise ValueError(f"Archive escapes the isolated directory: {day}")
+        try:
+            payload = path.read_bytes()
+        except FileNotFoundError:
+            payload = None
+        archives[day] = payload
+        digests[day.isoformat()] = hashlib.sha256(payload).hexdigest() if payload is not None else None
+    # The exclusive boundary needs an ordinal even on a weekend/holiday.
+    sessions = {day.isoformat(): i for i, day in enumerate(expected)}
+    sessions[last.isoformat()] = len(sessions)
+    if not math.isfinite(round_trip_cost_pct("CNC")) or round_trip_cost_pct("CNC") <= 0:
+        raise ValueError("Geometry research requires positive delivery trading costs")
+    binding = {"exploratory": True, "start": first.isoformat(), "symbols": symbols,
+               "code": _code_digest(), "archive_sha256": digests,
+               "actions_sha256": hashlib.sha256(action_bytes).hexdigest(),
+               "sessions": list(sessions), "calendar_manifest": manifest, "sample_step": 1, "cnc_cost_pct": round_trip_cost_pct("CNC"),
+               "numpy": np.__version__, "pandas": pd.__version__, "python": sys.version,
+               "settings_sha256": hashlib.sha256(json.dumps(
+                   {k: v for k, v in os.environ.items() if k.startswith("QT_")}, sort_keys=True
+               ).encode()).hexdigest()}
+    with closing(sqlite3.connect(checkpoint, timeout=30)) as db:
+        geometry = GeometryRun(db, cutoff=cutoff, end=end, binding=binding)
+        geometry.scoped_sessions = sessions
+        pending = [symbol for symbol in symbols if not geometry.completed(symbol)]
+        geometry.scoped_frames = {}
+
+        def validate():
+            geometry.scoped_frames, report = scoped_equity_frames(archives.items(), symbols, actions)
+            report["documented_special_sessions"] = sorted(set(sessions) & special_sessions - {end})
+            return report
+
+        validation = geometry.validate_once(validate)
+        if not validation["ok"]:
+            return {"status": "ABORTED", "validation": validation}
+        if pending and not geometry.scoped_frames:
+            geometry.scoped_frames, _ = scoped_equity_frames(archives.items(), pending, actions)
+        if pending:
+            scanner = UnifiedScanner(evidence_gate=False, calibration_snapshot={"multipliers": {}})
+            _run_backtest_inner(scanner, {}, pending, 1, len(days), MAX_HORIZON, 0,
+                                decision_grid=GRID_SESSION_ANCHORED, geometry=geometry)
+        return {**geometry.report(symbols, sessions), "validation": validation,
+                "research_start": start, "stock_scope": symbols,
+                "selection_bias": ("Manually named stock cohort. Censored windows and uninterrupted EQ warm-up "
+                                   "select for listings with continuous trading. Population inference is unsupported."),
+                "checkpoint_binding": hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()}

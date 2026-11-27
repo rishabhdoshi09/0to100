@@ -124,3 +124,99 @@ def validate(symbols=None, sample: int = 150, factors_enabled: bool = False) -> 
 
     failed = [c["check"] for c in checks if not c["ok"]]
     return {"ok": not failed, "checks": checks, "failed": failed}
+
+
+def scoped_equity_frames(archives, symbols, actions):
+    """Audit named NSE cash stocks against each expected regular-session file.
+
+    Missing sessions and suspect bars break both the feature warm-up and the
+    outcome window. Prices remain as traded within each admitted interval.
+    """
+    from collections import Counter, defaultdict
+    import csv
+    import io
+    import math
+
+    import pandas as pd
+
+    from data.bhavcopy_integrity import validate_archive_bytes
+
+    fields = {"open": "OPEN_PRICE", "high": "HIGH_PRICE", "low": "LOW_PRICE",
+              "close": "CLOSE_PRICE", "volume": "TTL_TRD_QNTY", "prev": "PREV_CLOSE"}
+    active_actions = {symbol: {item["ex_date"].date() for item in actions.get(symbol, ())}
+                      for symbol in symbols}
+    exclusions = defaultdict(Counter)
+    rows = defaultdict(list)
+    previous = {}
+    bad_files = {}
+    for day, payload in archives:
+        if payload is None:
+            bad_files[day.isoformat()] = "missing_archive"
+            previous.clear()
+            continue
+        valid, reason = validate_archive_bytes(payload, day)
+        if not valid:
+            bad_files[day.isoformat()] = reason
+            previous.clear()
+            continue
+        observed = defaultdict(list)
+        reader = csv.DictReader(io.StringIO(payload.decode("latin-1")), skipinitialspace=True)
+        reader.fieldnames = [column.strip().upper() for column in reader.fieldnames]
+        for row in reader:
+            symbol = (row.get("SYMBOL") or "").strip()
+            if symbol in active_actions:
+                observed[symbol].append(row)
+        for symbol in symbols:
+            records = observed[symbol]
+            eq = [r for r in records if (r.get("SERIES") or "").strip() == "EQ"]
+            reason = None
+            if not eq:
+                reason = ("trade_to_trade_BE" if any((r.get("SERIES") or "").strip() == "BE" for r in records)
+                          else "other_series" if records else "absent_from_archive")
+            elif len(eq) != 1:
+                reason = "duplicate_EQ_bar"
+            elif day in active_actions[symbol]:
+                reason = "documented_corporate_action"
+            else:
+                try:
+                    bar = {key: float(eq[0][column]) for key, column in fields.items()}
+                except (KeyError, TypeError, ValueError):
+                    bar = {}
+                prior = previous.get(symbol)
+                if (not bar or not all(math.isfinite(v) and v > 0 for v in bar.values())
+                        or not bar["low"] <= min(bar["open"], bar["close"])
+                        <= max(bar["open"], bar["close"]) <= bar["high"]):
+                    reason = "invalid_OHLCV_or_reference"
+                elif prior is not None and not math.isclose(prior, bar["prev"], rel_tol=1e-8, abs_tol=0.005):
+                    reason = "unreconciled_previous_close"
+                elif max(abs(bar[key] / bar["prev"] - 1) for key in ("open", "high", "low", "close")) >= 0.35:
+                    reason = "unreconciled_large_move"
+            if reason:
+                exclusions[symbol][reason] += 1
+                previous.pop(symbol, None)
+                continue
+            previous[symbol] = bar["close"]
+            del bar["prev"]
+            try:
+                delivery = float(eq[0].get("DELIV_PER"))
+            except (TypeError, ValueError):
+                delivery = None
+            bar["deliv_per"] = delivery if delivery is not None and 0 <= delivery <= 100 else float("nan")
+            rows[symbol].append({"date": day, **bar})
+
+    frames = {}
+    for symbol, bars in rows.items():
+        frame = pd.DataFrame(bars).set_index("date")
+        frame.index = pd.DatetimeIndex(frame.index)
+        frames[symbol] = frame
+    totals = Counter()
+    for counts in exclusions.values():
+        totals.update(counts)
+    return frames, {
+        "ok": bool(frames),
+        "market_wide_excluded_sessions": bad_files,
+        "quarantined_symbol_sessions_by_reason": dict(totals),
+        "quarantined_by_symbol": {s: dict(c) for s, c in exclusions.items()},
+        "admitted_bars": sum(map(len, frames.values())),
+        "symbols_with_bars": len(frames),
+    }
