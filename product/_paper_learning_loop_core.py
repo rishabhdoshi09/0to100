@@ -180,7 +180,7 @@ def recover_taken_entries(book, events, *, as_of: str) -> int:
         key = (trade.decision_id, trade.symbol, trade.entry_date)
         if key in known and known[key] not in (None, "", intent.record_id):
             raise ValueError("Committed fill conflicts with recorded taken intent")
-        credit = note_later_entry(trade.symbol, as_of=trade.entry_date)
+        credit = note_later_entry(trade.symbol, as_of=trade.entry_date, prior_sessions_only=True)
         if credit.get("errors"):
             raise RuntimeError("Recovered fill has pending GOOD_WAIT credit")
         if key in known:
@@ -219,9 +219,13 @@ def _lookup_taken(symbol: str, *, decision_id: str = "", entry_date: str = "") -
     symbol = symbol.upper()
     rows = [r for r in _read_jsonl(taken_path()) if str(r.get("symbol") or "").upper() == symbol]
     if decision_id:
-        for row in reversed(rows):
-            if str(row.get("paper_decision_id") or "") == str(decision_id):
-                return row
+        named = [row for row in rows if str(row.get("paper_decision_id") or "") == str(decision_id)]
+        if len(named) == 1:
+            return named[0]
+        if named and entry_date:
+            for row in reversed(named):
+                if str(row.get("entry_date") or row.get("as_of") or "")[:10] == entry_date[:10]:
+                    return row
     if entry_date:
         day = str(entry_date)[:10]
         # A row naming ANOTHER position is never borrowed, and the date match
@@ -778,7 +782,7 @@ def _wait_ordinal_state(row: Mapping[str, Any], entry_day: str) -> str:
 LATER_ENTRY_VERIFY_MAX_DAYS = 45
 
 
-def _queue_later_fills(symbol: str, entry_day: str) -> int:
+def _queue_later_fills(symbol: str, entry_day: str, *, prior_sessions_only: bool = False) -> int:
     """Durably record a later fill on each pending WAIT of ``symbol`` it may credit, BEFORE any credit.
 
     The marker is the credit's durable intent (lifecycle audit F1, 24 Nov). The credit used
@@ -794,6 +798,8 @@ def _queue_later_fills(symbol: str, entry_day: str) -> int:
         changed = 0
         for row in rows:
             if row.get("classification") or str(row.get("symbol") or "").upper() != symbol:
+                continue
+            if prior_sessions_only and str(row.get("as_of") or "")[:10] >= entry_day:
                 continue
             if row.get("later_entry_pending"):
                 continue
@@ -1016,7 +1022,7 @@ def _sessions_through(day: str, entry_day: str) -> int | None:
 
 
 def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None = None,
-                     as_of: str | None = None) -> dict[str, Any]:
+                     as_of: str | None = None, prior_sessions_only: bool = False) -> dict[str, Any]:
     """A waited name later received a valid fill → GOOD_WAIT. Not booked as extra P&L.
 
     Only the symbol's pending WAIT decisions whose horizon still covers the
@@ -1026,7 +1032,7 @@ def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None
     """
     entry_day = str(as_of or datetime.now(timezone.utc).date().isoformat())[:10]
     symbol = str(symbol).upper()
-    queued = _queue_later_fills(symbol, entry_day)
+    queued = _queue_later_fills(symbol, entry_day, prior_sessions_only=prior_sessions_only)
     out = retry_pending_good_waits(path=path, floors=floors, today=entry_day, symbols={symbol})
     credited = int(out.get("credited") or 0)
     result: dict[str, Any] = {"updated": credited, "classifications": {GOOD_WAIT: credited} if credited else {},

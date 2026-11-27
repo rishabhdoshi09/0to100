@@ -8,9 +8,9 @@ its price path, MISSED_WINNER, beside a policy that had already counted GOOD_WAI
 unit stayed CLAIMED forever.
 
 The fill is now marked durably first, and every credit is made from the mark. A unit the
-credit claimed before marks existed is finished with its own fill. A crash BEFORE the mark
-(after the paper fill was saved) still loses that one credit. The result is an under-count,
-with the ledger and the policies agreeing, never a double count.
+credit claimed before marks existed is finished with its own fill. Recovery can also
+recreate a missing marker for a prior-session WAIT from committed fill lineage. A
+same-session WAIT requires the original marker because intraday ordering is unknown.
 """
 from __future__ import annotations
 
@@ -147,6 +147,18 @@ def test_a_credit_cut_short_anywhere_after_its_mark_is_finished_once(wait, monke
     assert not row.get("classification") and row["later_entry_pending"]["fill_session"] == FILL
     _restart_and_settle()
     _credited_once()
+
+
+def test_recovery_does_not_queue_same_session_wait(wait):
+    from product import _paper_learning_loop_core as core
+    from product import counterfactual_learning as CF
+
+    CF.freeze_decision(symbol="TCS", reason_code="WAIT_FOR_PULLBACK", decision="WAIT",
+                       entry=100, stop=94, target=115, as_of=FILL, evidence={"note": "later same day"})
+    assert core._queue_later_fills("TCS", FILL, prior_sessions_only=True) == 1
+    rows = {row["as_of"]: row for row in _rows()}
+    assert rows["2026-09-10"]["later_entry_pending"]["fill_session"] == FILL
+    assert "later_entry_pending" not in rows[FILL]
 
 
 def test_without_a_crash_the_credit_lands_at_once(wait):

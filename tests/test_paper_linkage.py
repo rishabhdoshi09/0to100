@@ -139,7 +139,8 @@ def test_committed_entry_recovers_taken_evidence_after_interrupted_write(tmp_pat
     committed = load_committed_paper_book(path)
 
     credit = []
-    def record_credit(symbol, *, as_of):
+    def record_credit(symbol, *, as_of, prior_sessions_only):
+        assert prior_sessions_only
         credit.append((symbol, as_of))
         return {}
 
