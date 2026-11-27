@@ -200,8 +200,7 @@ def test_review_context_age_is_relative_to_decision(monkeypatch):
     assert "vix" not in PF.context_features("2026-09-08T10:00:00+05:30")
 
 
-@pytest.mark.xfail(strict=True, reason="QT-08 known limit: no point-in-time instrument names in the store")
-def test_review_name_classified_etf_cannot_supply_breadth_minimum():
+def test_review_known_etf_cannot_supply_breadth_minimum():
     from data.nse_universe import _is_non_stock_fund
 
     assert _is_non_stock_fund("MON100", "MOTILAL OSWAL NASDAQ 100 ETF")

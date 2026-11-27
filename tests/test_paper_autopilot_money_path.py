@@ -162,6 +162,7 @@ def test_watch_tier_is_rejected_not_entered(monkeypatch):
 
 def test_shared_signal_log_can_fill_only_as_a_protected_exploration_probe(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_PAPER_EXPLORATION", "1")
+    monkeypatch.setattr("product.paper_autopilot._exploration_path", lambda: tmp_path / "quota.json")
     book, raw, pipeline = _pipeline_book(tmp_path)
     card = _eligible_card("INFY", reco_tier="watch", verdict="WATCH")
     for method in card["methods"]:
