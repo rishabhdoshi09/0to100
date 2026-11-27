@@ -56,6 +56,26 @@ def test_symbol_resume_is_atomic_and_selection_does_not_use_evaluation(tmp_path)
         GeometryRun(db, cutoff=days[80], end=days[160], binding={"data": "version 2"})
 
 
+def test_observations_are_censored_and_committed_with_outcomes(tmp_path):
+    days = _days()
+    db = sqlite3.connect(tmp_path / "observations.sqlite")
+    run = GeometryRun(db, cutoff=days[80], end=days[160], binding={"observations": True})
+    history = pd.DataFrame({"close": [100.] * 60, "volume": [200_000.] * 60})
+    forward = pd.DataFrame({"open": [102.] * 3, "close": [104.] * 3})
+    row = run.observe(days[60], history, forward, None)
+    with pytest.raises(sqlite3.IntegrityError):
+        run.save("TCS", [], [row, row])
+    assert not run.completed("TCS")
+    assert db.execute("SELECT count(*) FROM geometry_observations").fetchone() == (0,)
+    run.save("TCS", [], [row])
+    run.save("TCS", [], [row])
+    assert db.execute("SELECT features, outcome FROM geometry_observations").fetchall() == [row[1:]]
+    import json
+    outcome = json.loads(row[2])
+    assert outcome["next_open_gap"] == pytest.approx(.02)
+    assert outcome["close_return"] is None
+
+
 
 def test_frozen_snapshot_cache_survives_a_failed_read(tmp_path, monkeypatch):
     from data import bhavcopy_store

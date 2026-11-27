@@ -1050,6 +1050,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         day_keys = list(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")) if official_index else []
         symbol_used = False
         geometry_rows = []
+        geometry_observations = []
         anchored = decision_grid == GRID_SESSION_ANCHORED
         last_t = n + 1 if geometry is not None else n if official_index else n - horizon
         segment_start = 0
@@ -1107,6 +1108,11 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                 if geometry is not None:
                     raise
                 continue
+            if geometry is not None and geometry.observations:
+                forward = df.iloc[t:t + avail]
+                if scale != 1:
+                    forward = geometry.rescale(forward, scale)
+                geometry_observations.append(geometry.observe(day_keys[t - 1], hist, forward, r))
             if r is None or not r.signals:
                 continue
             risk = r.entry - r.stop
@@ -1229,7 +1235,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                     elif outcome == "LOSS":
                         rg["closed"] += 1
         if geometry is not None:
-            geometry.save(sym, geometry_rows)
+            geometry.save(sym, geometry_rows, geometry_observations)
             continue
         with _state_lock:
             _state["progress"] = si + 1

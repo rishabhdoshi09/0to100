@@ -27,6 +27,9 @@ def main(argv=None) -> int:
     ap.add_argument("--evaluation-before", help="Exclusive end date of the evaluation period")
     ap.add_argument("--research-start", help="First archive date for exploratory scoped equity research")
     ap.add_argument("--stocks", help="Comma-separated, explicitly named operating-company NSE symbols")
+    ap.add_argument("--observations", action="store_true", help="Persist scoped point-in-time observations")
+    ap.add_argument("--sample-step", type=int, default=1, help="Official decision-session stride")
+    ap.add_argument("--max-symbols", type=int, help="Maximum pending symbols to process this invocation")
     args = ap.parse_args(argv)
     if args.geometry_checkpoint:
         if args.skip_validation or args.factors or not args.development_before or not args.evaluation_before:
@@ -37,10 +40,13 @@ def main(argv=None) -> int:
             ap.error("scoped research requires both --research-start and --stocks")
         report = run(args.geometry_checkpoint, cutoff=args.development_before, end=args.evaluation_before,
                      research_start=args.research_start,
-                     stocks=args.stocks.split(",") if args.stocks else None)
+                     stocks=args.stocks.split(",") if args.stocks else None,
+                     observations=args.observations, sample_step=args.sample_step,
+                     max_symbols=args.max_symbols)
         print(json.dumps(report, indent=2, allow_nan=False))
         return 2 if report.get("status") == "ABORTED" else 0
-    if args.development_before or args.evaluation_before or args.research_start or args.stocks:
+    if (args.development_before or args.evaluation_before or args.research_start or args.stocks
+            or args.observations or args.sample_step != 1 or args.max_symbols is not None):
         ap.error("date boundaries require --geometry-checkpoint")
 
     from gauntlet.runner import run_gauntlet

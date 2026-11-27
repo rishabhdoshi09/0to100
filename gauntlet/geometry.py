@@ -33,6 +33,7 @@ GRID = {
 }
 MAX_HORIZON = max(spec[3] for spec in GRID.values())
 EXIT_CLASSES = ("target_first", "stop_first", "time_expiry")
+DISCOVERY_END = "2025-11-01"
 
 
 class GeometryRun:
@@ -46,6 +47,7 @@ class GeometryRun:
         self.scoped_sessions = None
         self.scoped_frames = None
         self.exploratory = bool(binding.get("exploratory"))
+        self.observations = bool(binding.get("observations"))
         config = json.dumps([self.cutoff, self.end, GRID, BREAKEVEN_TRIGGER_PCT, binding], sort_keys=True)
         with db:
             db.execute("CREATE TABLE IF NOT EXISTS geometry_config (id INTEGER PRIMARY KEY, spec TEXT)")
@@ -63,6 +65,13 @@ class GeometryRun:
             columns = {row[1] for row in db.execute("PRAGMA table_info(geometry_outcomes)")}
             if "exit_day" not in columns:
                 db.execute("ALTER TABLE geometry_outcomes ADD COLUMN exit_day TEXT")
+            if self.observations:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS geometry_observations (
+                        symbol TEXT, day TEXT, features TEXT NOT NULL,
+                        outcome TEXT NOT NULL, PRIMARY KEY (symbol, day)
+                    ) WITHOUT ROWID
+                """)
 
     def validate_once(self, validate):
         """Reuse the successful preflight for the exact bound snapshot."""
@@ -79,13 +88,41 @@ class GeometryRun:
     def completed(self, symbol):
         return self.db.execute("SELECT 1 FROM geometry_done WHERE symbol=?", (symbol,)).fetchone() is not None
 
-    def save(self, symbol, rows):
+    def save(self, symbol, rows, observations=()):
         # Commit a complete symbol once, even if two workers overlap.
         with self.db:
             inserted = self.db.execute("INSERT OR IGNORE INTO geometry_done VALUES (?)", (symbol,))
             if inserted.rowcount:
                 self.db.executemany("INSERT INTO geometry_outcomes VALUES (?,?,?,?,?,?,?,?,?)",
                                     ((symbol, *row) for row in rows))
+                if self.observations:
+                    self.db.executemany("INSERT INTO geometry_observations VALUES (?,?,?,?)",
+                                        ((symbol, *row) for row in observations))
+
+    @staticmethod
+    def observe(day, history, forward, setup):
+        """Store decision features separately from future measurements."""
+        close = history.close.to_numpy()
+        returns = close[-20:] / close[-21:-1] - 1
+        features = {
+            "close": float(close[-1]),
+            "momentum_20": float(close[-1] / close[-21] - 1),
+            "volatility_20": float(np.std(returns)),
+            "turnover_20": float((history.close * history.volume).tail(20).mean()),
+            "signals": sorted(setup.signals) if setup else [],
+            "score": float(setup.score) if setup else None,
+            "verdict": setup.verdict if setup else None,
+        }
+        # A missing next bar is a censoring event, not a zero gap or a no-fill.
+        outcome = {"next_open_gap": None, "close_return": None, "open_to_close_return": None}
+        if len(forward):
+            entry = float(forward.open.iloc[0])
+            outcome["next_open_gap"] = entry / float(close[-1]) - 1
+            if len(forward) >= HORIZON_SESSIONS:
+                end = float(forward.close.iloc[HORIZON_SESSIONS - 1])
+                outcome.update(close_return=end / float(close[-1]) - 1,
+                               open_to_close_return=end / entry - 1)
+        return day, json.dumps(features, sort_keys=True, allow_nan=False), json.dumps(outcome, sort_keys=True, allow_nan=False)
 
     @staticmethod
     def rescale(frame, multiplier):
@@ -288,7 +325,8 @@ def _code_digest():
     return code.hexdigest()
 
 
-def run(checkpoint: Path, *, cutoff: str, end: str, research_start=None, stocks=None):
+def run(checkpoint: Path, *, cutoff: str, end: str, research_start=None, stocks=None,
+        observations=False, sample_step=1, max_symbols=None):
     """Resume on a frozen local archive using the existing dataset gate."""
     from core.live_volume import on_live_volume
 
@@ -303,7 +341,10 @@ def run(checkpoint: Path, *, cutoff: str, end: str, research_start=None, stocks=
     root_path = Path(root).resolve()
     if research_start is not None or stocks is not None:
         return _run_scoped(checkpoint, cutoff=cutoff, end=end, start=research_start, stocks=stocks,
-                           root=root_path)
+                           root=root_path, observations=observations, sample_step=sample_step,
+                           max_symbols=max_symbols)
+    if observations or sample_step != 1 or max_symbols is not None:
+        raise ValueError("Observation and batching options require scoped research")
     metadata = (bhavcopy_store._PKL, index_store._PKL, _events_path(),
                 universe_history_path())
     instrument_names = logs_path("instruments_cache.csv")
@@ -388,7 +429,8 @@ def run(checkpoint: Path, *, cutoff: str, end: str, research_start=None, stocks=
         return {**result, "validation": validation, "binding": binding}
 
 
-def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root):
+def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root, observations=False,
+                sample_step=1, max_symbols=None):
     from core.runtime_paths import logs_path
     from data import bhavcopy_store
     from data.corporate_actions import events_path, load_events
@@ -403,6 +445,9 @@ def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root):
     first, split, last = map(date.fromisoformat, (start, cutoff, end))
     if not first < split < last <= date.today():
         raise ValueError("Use ordered historical start, split and end dates")
+    if (sample_step < 1 or (max_symbols is not None and max_symbols < 1)
+            or (observations and last > date.fromisoformat(DISCOVERY_END))):
+        raise ValueError("Use positive batching parameters and keep observations outside the reserved period")
     symbols = sorted({symbol.strip().upper() for symbol in stocks if symbol.strip()})
     if not symbols or any(_is_non_stock_fund(symbol) for symbol in symbols):
         raise ValueError("Supply explicit operating-company NSE symbols")
@@ -446,7 +491,8 @@ def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root):
     binding = {"exploratory": True, "start": first.isoformat(), "symbols": symbols,
                "code": _code_digest(), "archive_sha256": digests,
                "actions_sha256": hashlib.sha256(action_bytes).hexdigest(),
-               "sessions": list(sessions), "calendar_manifest": manifest, "sample_step": 1, "cnc_cost_pct": round_trip_cost_pct("CNC"),
+               "sessions": list(sessions), "calendar_manifest": manifest, "sample_step": sample_step,
+               "observations": observations, "cnc_cost_pct": round_trip_cost_pct("CNC"),
                "numpy": np.__version__, "pandas": pd.__version__, "python": sys.version,
                "settings_sha256": hashlib.sha256(json.dumps(
                    {k: v for k, v in os.environ.items() if k.startswith("QT_")}, sort_keys=True
@@ -455,6 +501,8 @@ def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root):
         geometry = GeometryRun(db, cutoff=cutoff, end=end, binding=binding)
         geometry.scoped_sessions = sessions
         pending = [symbol for symbol in symbols if not geometry.completed(symbol)]
+        reused = len(symbols) - len(pending)
+        pending = pending[:max_symbols]
         geometry.scoped_frames = {}
 
         def validate():
@@ -469,9 +517,18 @@ def _run_scoped(checkpoint, *, cutoff, end, start, stocks, root):
             geometry.scoped_frames, _ = scoped_equity_frames(archives.items(), pending, actions)
         if pending:
             scanner = UnifiedScanner(evidence_gate=False, calibration_snapshot={"multipliers": {}})
-            _run_backtest_inner(scanner, {}, pending, 1, len(days), MAX_HORIZON, 0,
+            _run_backtest_inner(scanner, {}, pending, sample_step, len(days), MAX_HORIZON, 0,
                                 decision_grid=GRID_SESSION_ANCHORED, geometry=geometry)
+        completed = sum(geometry.completed(symbol) for symbol in symbols)
+        observation_count, observation_symbols = (db.execute(
+            "SELECT count(*), count(DISTINCT symbol) FROM geometry_observations"
+        ).fetchone() if observations else (None, None))
         return {**geometry.report(symbols, sessions), "validation": validation,
+                "status": "COMPLETE" if completed == len(symbols) else "PARTIAL",
+                "checkpoint_progress": {"reused_symbols": reused, "completed_symbols": completed,
+                                        "pending_symbols": len(symbols) - completed,
+                                        "observations": observation_count,
+                                        "symbols_with_observations": observation_symbols},
                 "research_start": start, "stock_scope": symbols,
                 "selection_bias": ("Manually named stock cohort. Censored windows and uninterrupted EQ warm-up "
                                    "select for listings with continuous trading. Population inference is unsupported."),
