@@ -512,6 +512,7 @@ def decide_session(
                     paper_enabled=True,
                     regime=replay_regime,
                     enforce_history=False,
+                    **({"policies": [], "isolated_book": True} if bind_selection_card else {}),
                 )
                 raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
                 selection_rank = decision.selection_score
@@ -538,7 +539,8 @@ def decide_session(
         if selection_rank is None:
             try:
                 from product.paper_autopilot import selection_score as production_selection_score
-                selection_rank = production_selection_score(card)
+                selection_rank = (production_selection_score(card, use_challenger=False)
+                                  if bind_selection_card else production_selection_score(card))
             except Exception:
                 selection_rank = None
         out.append({
@@ -613,6 +615,8 @@ def decide_session(
                 out[-1]["evidence_fingerprint"] = ""
                 out[-1]["excluded_from_learning"] = True
         except Exception:
+            if bind_selection_card:
+                raise
             out[-1]["freeze_id"] = ""
             out[-1]["evidence_fingerprint"] = ""
         try:

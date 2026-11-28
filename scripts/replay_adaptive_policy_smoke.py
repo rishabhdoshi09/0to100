@@ -2,8 +2,10 @@
 
 import argparse
 import json
+import os
+import sys
 import sqlite3
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from datetime import date
 from hashlib import sha256
 from pathlib import Path
@@ -12,6 +14,7 @@ from core.live_volume import on_live_volume
 from core.runtime_paths import REPO_ROOT, runtime_root
 from data.corporate_actions import load_events
 from gauntlet.validator import scoped_equity_frames
+from product.decision_freeze import freeze_path
 from product.historical_paper_loop import compare_historical_policies
 from product.historical_replay import decide_session, scan_session
 
@@ -23,11 +26,19 @@ def main():
     parser.add_argument("archive_logs", type=Path)
     parser.add_argument("geometry_checkpoint", type=Path)
     args = parser.parse_args()
+    if not os.environ.get("QT_RUNTIME_ROOT", "").strip():
+        parser.error("Set QT_RUNTIME_ROOT to a dedicated scratch directory")
     root = runtime_root().resolve(strict=True)
     archive = args.archive_logs.resolve(strict=True)
     checkpoint = args.geometry_checkpoint.resolve(strict=True)
-    if root == REPO_ROOT or any(on_live_volume(path) for path in (root, archive, checkpoint)):
+    if (root == REPO_ROOT or any(on_live_volume(path) for path in (root, archive, checkpoint))
+            or (root / "logs").is_symlink() or os.statvfs(root).f_flag & os.ST_RDONLY):
         parser.error("Use an isolated runtime and copied archive and checkpoint")
+
+    if (not freeze_path().resolve().is_relative_to(root)
+            or any(os.environ.get(key) and not Path(os.environ[key]).resolve().is_relative_to(root)
+                   for key in ("LOG_DIR", "QT_LEARNING_POLICIES"))):
+        parser.error("Replay paths must stay inside QT_RUNTIME_ROOT")
 
     with closing(sqlite3.connect(checkpoint.as_uri() + "?mode=ro", uri=True)) as db:
         binding = json.loads(db.execute("SELECT spec FROM geometry_config").fetchone()[0])[-1]
@@ -78,8 +89,10 @@ def main():
             bars[timestamp.date().isoformat()][symbol] = tuple(float(row[k]) for k in ("open", "high", "low", "close"))
     frozen = [row for row in decisions if row.get("freeze_id") and (row.get("pit") or {}).get("max_bar_date")]
     result = compare_historical_policies(frozen, official_sessions=sessions, bars=bars, directory=root / "comparison")
-    print(json.dumps({"raw_decisions": len(decisions), "frozen_decisions": len(frozen), "scans": scans, "result": result}))
+    return {"raw_decisions": len(decisions), "frozen_decisions": len(frozen), "scans": scans, "result": result}
 
 
 if __name__ == "__main__":
-    main()
+    with redirect_stdout(sys.stderr):
+        result = main()
+    print(json.dumps(result))

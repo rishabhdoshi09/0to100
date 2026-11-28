@@ -90,6 +90,36 @@ def test_comparison_refuses_reserve_future_inputs_and_unsafe_path(tmp_path, monk
         HPL.compare_historical_policies([], official_sessions=["2025-04-01"], bars={}, directory=target, synthetic=True)
 
 
+def test_comparison_rejects_tampered_frozen_selection_card(tmp_path, monkeypatch):
+    from product.decision_freeze import freeze
+    from product.historical_replay import selection_card_digest
+    from research.intelligence.data import nse_calendar
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("QT_DECISION_FREEZE", str(tmp_path / "logs/decisions.sqlite"))
+    monkeypatch.setattr(nse_calendar, "load_manifest", lambda _path: {})
+    monkeypatch.setattr(nse_calendar, "calendar_gap", lambda *_args: None)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "nse_holidays.json").write_text("[]")
+    day = "2025-04-01"
+    row = {
+        "as_of": day, "symbol": "TCS", "provenance": "HISTORICAL_REPLAY",
+        "pit": {"max_bar_date": day}, "selection_card": {"entry": 100},
+    }
+    row["data_snapshot_id"] = selection_card_digest(row["selection_card"])
+    row["freeze_id"] = freeze(row)["freeze_id"]
+    row["selection_card"]["entry"] = 90
+    options = {"bars": {}, "directory": tmp_path / "comparison"}
+    with pytest.raises(ValueError, match="consecutive official session"):
+        HPL.compare_historical_policies([row], official_sessions=[day, "2025-04-03"], **options)
+    with pytest.raises(ValueError, match="immutable PIT freeze"):
+        HPL.compare_historical_policies([row], official_sessions=[day], **options)
+    row["data_snapshot_id"] = selection_card_digest(row["selection_card"])
+    with pytest.raises(ValueError, match="immutable PIT freeze"):
+        HPL.compare_historical_policies([row], official_sessions=[day], **options)
+
+
 def test_virtual_trade_same_bar_stop_and_target_is_conservative_stop_first():
     row = {
         "run_id": "r1",
