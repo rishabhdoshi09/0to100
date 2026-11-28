@@ -319,7 +319,8 @@ class Supervisor:
                         or key.startswith("hist_research:")
                         or key.startswith("research_replan:")
                         or key == SCH.OUTCOME_DISCOVERY_KEY
-                        or key.startswith((SCH.OUTCOME_PROGRAMME_PREFIX, SCH.OUTCOME_FRONTIER_PREFIX))
+                        or key.startswith((SCH.OUTCOME_PROGRAMME_PREFIX, SCH.OUTCOME_FRONTIER_PREFIX,
+                                              SCH.ECONOMIC_READINESS_PREFIX))
                     )
                 elif job.job_type == SCH.HISTORICAL_PAPER_CYCLE:
                     retire = not key.startswith("hist_paper:")
@@ -965,6 +966,15 @@ class Supervisor:
                 else:
                     if key:
                         self.jobs.enqueue(SCH.RESEARCH_CYCLE, idempotency_key=key)
+                if os.environ.get("QT_ECONOMIC_RECEIPT"):
+                    from research.autonomy.economic_readiness import configured_job
+                    try:
+                        economic = configured_job(discovery)
+                    except (ValueError, FileNotFoundError) as exc:
+                        self._incident("ECONOMIC_DATA_BLOCKED", str(exc))
+                    else:
+                        if economic:
+                            self.jobs.enqueue(SCH.RESEARCH_CYCLE, idempotency_key=economic[0])
 
         # Closed market starts by finding today's best available trades from the
         # latest completed official session. Once fresh discovery is ready, the

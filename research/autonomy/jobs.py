@@ -1757,6 +1757,24 @@ def run_research_cycle(ctx) -> JobResult:
                              error_code="DISCOVERY_ERROR", error_message=str(exc))
         return JobResult(JS.SUCCEEDED, f"discovery: {result['status']}", metadata=result)
 
+    if key.startswith(SCH.ECONOMIC_READINESS_PREFIX):
+        from research.autonomy.economic_readiness import audit, configured_job
+        from research.autonomy.outcome_discovery import configured_checkpoint
+
+        try:
+            checkpoint = configured_checkpoint()
+            planned = configured_job(checkpoint) if checkpoint is not None else None
+            if planned is None or planned[0] != key:
+                raise ValueError("Economic audit input generation changed")
+            result = audit(*planned[1], archive=planned[2])
+        except (ValueError, FileNotFoundError) as exc:
+            return JobResult(JS.PERMANENT_FAILED, "economic data audit refused",
+                             error_code="ECONOMIC_AUDIT_INPUT_REFUSED", error_message=str(exc))
+        except Exception as exc:
+            return JobResult(JS.RETRYABLE_FAILED, "economic data audit failed",
+                             error_code="ECONOMIC_AUDIT_ERROR", error_message=str(exc))
+        return JobResult(JS.SUCCEEDED, "economic data audit complete", metadata=result)
+
     historical = key.startswith("hist_research:")
     batch_id = str(getattr(job, "input_snapshot_id", "") or "") if historical else ""
     historical_stage: dict[str, Any] = {}
