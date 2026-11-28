@@ -147,9 +147,22 @@ def configured_checkpoint() -> Path | None:
     return _isolated_checkpoint(Path(raw)) if raw else None
 
 
-def _digest(path):
+def _identity(path):
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
+def _digest(path, identity):
     with path.open("rb") as snapshot:
-        return hashlib.file_digest(snapshot, "sha256").hexdigest()
+        stat = os.fstat(snapshot.fileno())
+        if (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size) != identity:
+            raise ValueError("Gauntlet snapshot changed during discovery")
+        digest = hashlib.file_digest(snapshot, "sha256").hexdigest()
+    if _identity(path) != identity or any(
+        path.with_name(path.name + suffix).exists() for suffix in ("-wal", "-journal", "-shm")
+    ):
+        raise ValueError("Gauntlet snapshot changed during discovery")
+    return digest
 
 
 def run(checkpoint: Path) -> dict:
@@ -162,6 +175,9 @@ def run(checkpoint: Path) -> dict:
         raise ValueError("Discovery requires a bounded, sealed checkpoint without sidecars")
     code_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     with writer_lock(logs_path("outcome_discovery")):
+        identity = _identity(source)
+        if identity[-1] > WINDOW["budget"]["input_bytes"]:
+            raise ValueError("Discovery source exceeds the resource budget")
         with closing(sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
             _, end, grid, _, binding = json.loads(
                 connection.execute("SELECT spec FROM geometry_config WHERE id=1").fetchone()[0]
@@ -177,7 +193,7 @@ def run(checkpoint: Path) -> dict:
                 raise ValueError("Requires the complete, discovery-only Gauntlet observation checkpoint")
             if connection.execute("SELECT 1 FROM geometry_observations WHERE day >= ? LIMIT 1", (END,)).fetchone():
                 raise ValueError("Checkpoint contains reserved observation keys")
-            source_hash = _digest(source)
+            source_hash = _digest(source, identity)
             description = f"{WINDOW['hypothesis']} Gauntlet SHA-256 {source_hash}."
             hid = registry.register_hypothesis(NAME, CRITERIA, WINDOW, description, code_hash=code_hash)
             existing = registry.get_experiment(hid)
@@ -187,7 +203,7 @@ def run(checkpoint: Path) -> dict:
                 raise ValueError("Pending discovery was registered by a different implementation")
             start = monotonic()
             metrics = _measure(connection, {day: index for index, day in enumerate(days)}, symbols)
-        if _digest(source) != source_hash:
+        if _digest(source, identity) != source_hash:
             raise ValueError("Gauntlet snapshot changed during discovery")
         if metrics["excess_inference"]["status"] != "OK":
             status = "INCONCLUSIVE"
