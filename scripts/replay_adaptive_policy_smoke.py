@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from core.live_volume import on_live_volume
-from core.runtime_paths import REPO_ROOT, runtime_root
+from core.runtime_paths import REPO_ROOT, logs_dir, runtime_root
 from data.corporate_actions import load_events
 from gauntlet.validator import scoped_equity_frames
 from product.decision_freeze import freeze_path
@@ -32,7 +32,7 @@ def main():
     archive = args.archive_logs.resolve(strict=True)
     checkpoint = args.geometry_checkpoint.resolve(strict=True)
     if (root == REPO_ROOT or any(on_live_volume(path) for path in (root, archive, checkpoint))
-            or (root / "logs").is_symlink() or os.statvfs(root).f_flag & os.ST_RDONLY):
+            or logs_dir().is_symlink() or os.statvfs(root).f_flag & os.ST_RDONLY):
         parser.error("Use an isolated runtime and copied archive and checkpoint")
 
     if (not freeze_path().resolve().is_relative_to(root)

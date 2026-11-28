@@ -981,8 +981,7 @@ def compare_historical_policies(decisions, *, official_sessions, bars, directory
         from product.historical_replay import selection_card_digest
         from research.intelligence.data import nse_calendar as calendar
 
-        metadata = root / "logs"
-        paths = [metadata / "nse_holidays.json", metadata / "nse_calendar_manifest.json", freeze_path()]
+        paths = [logs_path("nse_holidays.json"), logs_path("nse_calendar_manifest.json"), freeze_path()]
         if any(not path.resolve().is_relative_to(root) for path in paths):
             raise ValueError("Comparison calendar and decision freeze must stay inside its runtime")
         holidays = set(json.loads(paths[0].read_text()))
