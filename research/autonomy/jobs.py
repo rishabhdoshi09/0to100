@@ -1766,8 +1766,8 @@ def run_research_cycle(ctx) -> JobResult:
             planned = configured_job(checkpoint) if checkpoint is not None else None
             if planned is None or planned[0] != key:
                 raise ValueError("Economic audit input generation changed")
-            result = audit(*planned[1], archive=planned[2])
-        except (ValueError, FileNotFoundError) as exc:
+            result = audit(*planned[1], archive=planned[2], expected_identities=planned[3])
+        except ValueError as exc:
             return JobResult(JS.PERMANENT_FAILED, "economic data audit refused",
                              error_code="ECONOMIC_AUDIT_INPUT_REFUSED", error_message=str(exc))
         except Exception as exc:

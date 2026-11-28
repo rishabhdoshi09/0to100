@@ -63,7 +63,7 @@ def test_scheduled_audit_bound_to_receipt_generation(monkeypatch):
         monkeypatch.setenv("QT_OUTCOME_DISCOVERY_CHECKPOINT", str(base))
         monkeypatch.setenv("QT_ECONOMIC_FRONTIER", str(frontier))
         monkeypatch.setenv("QT_ECONOMIC_RECEIPT", str(receipt))
-        key, _, _ = readiness.configured_job(base)
+        key, *_ = readiness.configured_job(base)
         monkeypatch.setattr(readiness, "audit", lambda *_a, **_k: {"predictive_looks_used": 0})
         ctx = SimpleNamespace(job=SimpleNamespace(idempotency_key=key))
         assert jobs.run_research_cycle(ctx).status == job_store.SUCCEEDED

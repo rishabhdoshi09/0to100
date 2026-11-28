@@ -123,7 +123,7 @@ def _audit_price_windows(archive, binding, dates, events):
         )
 
 
-def audit(checkpoint: Path, frontier: Path, receipt: Path, *, archive: Path | None = None):
+def audit(checkpoint: Path, frontier: Path, receipt: Path, *, archive: Path | None = None, expected_identities=None):
     base = scope._isolated_checkpoint(checkpoint)
     derived = scope._isolated_checkpoint(frontier)
     record = scope._isolated_checkpoint(receipt)
@@ -135,6 +135,8 @@ def audit(checkpoint: Path, frontier: Path, receipt: Path, *, archive: Path | No
         raise ValueError("Economic audit exceeds its bounded input size")
     paths = (base, derived, record)
     identities = [scope._identity(path) for path in paths]
+    if expected_identities is not None and identities != expected_identities:
+        raise ValueError("Economic audit input generation changed before opening")
     digests = [scope._digest(path, identity) for path, identity in zip(paths, identities)]
     with closing(sqlite3.connect(base.as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
         _, end, _, _, binding = json.loads(db.execute("SELECT spec FROM geometry_config WHERE id=1").fetchone()[0])
@@ -212,9 +214,10 @@ def configured_job(checkpoint):
         return None
     paths = [scope._isolated_checkpoint(Path(item)) for item in (checkpoint, frontier, receipt)]
     archive = os.environ.get("QT_FRONTIER_ARCHIVE")
-    identity = json.dumps([[(str(p), scope._identity(p)) for p in paths], archive])
+    identities = [scope._identity(p) for p in paths]
+    identity = json.dumps([list(zip(map(str, paths), identities)), archive])
     key = ECONOMIC_READINESS_PREFIX + hashlib.sha256(identity.encode()).hexdigest()[:20]
-    return key, paths, Path(archive) if archive else None
+    return key, paths, Path(archive) if archive else None, identities
 
 
 if __name__ == "__main__":
