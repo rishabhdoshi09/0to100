@@ -2,8 +2,92 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from product import historical_paper_loop as HPL
 from research.autonomy import evidence_acquisition as EA
+
+
+@pytest.mark.parametrize("reversal", [False, True])
+def test_policy_comparison_isolated_learning_and_crash_resume(tmp_path, monkeypatch, reversal):
+    from product.evidence_policy_engine import evaluate_policies
+    from product.learning_policy_store import load_policies, HISTORICAL_COMPARISON_SOURCE
+    from tests.test_paper_autopilot_money_path import _eligible_card
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    production = tmp_path / "untouched-forward-policies.json"
+    production.write_text('{"policies":[]}')
+    monkeypatch.setenv("QT_LEARNING_POLICIES", str(production))
+    external_reads = []
+    def external_read(*args, **kwargs):
+        external_reads.append(True)
+        raise AssertionError("Historical selection read a present-day authority")
+
+    monkeypatch.setattr("risk.portfolio_risk.account_exposure_gate", external_read)
+    monkeypatch.setattr("product.challenger_learning.paper_selection_adjustment", external_read)
+    days = [f"2025-04-{n:02}" for n in (1, 2, 3, 4, 7, 8, 9)]
+    good, bad = "TCS", "INFY"
+    rows = []
+    def decision(day, symbol):
+        setup = "positive-control" if symbol == good else "negative-control"
+        card = _eligible_card(symbol, setup_label=setup, sector=symbol)
+        return {"decision": "BUY", "symbol": symbol, "as_of": day, "setup": setup,
+                "regime": "RISK_ON", "target": card["target"], "selection_card": card}
+
+    rows.extend(decision(d, symbol) for d, symbol in zip(days, (good, good, bad, bad)))
+    rows.extend([decision(days[4], good), decision(days[4], bad)])
+    win, loss = (100, 116, 98, 115), (85, 90, 83, 88)
+    bars = {d: {good: win, bad: loss} for d in days}
+    if reversal:
+        bars[days[5]][bad] = win
+    floors = dict(experimental=2, eligible=2, active=2, sessions_eligible=2, sessions_active=2)
+    options = dict(official_sessions=days, bars=bars, synthetic=True, floors=floors)
+    original = json.dumps(rows, sort_keys=True)
+    checkpoint = HPL._HistoricalPolicyComparison.save
+
+    def interrupted(branch, payload):
+        if branch.adaptive and payload["session"] == days[4]:
+            raise OSError("interrupted after learning and decision freeze")
+        return checkpoint(branch, payload)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(HPL._HistoricalPolicyComparison, "save", interrupted)
+        with pytest.raises(OSError, match="after learning"):
+            HPL.compare_historical_policies(rows, directory=tmp_path / "resumed", **options)
+    repaired = HPL.compare_historical_policies(rows, directory=tmp_path / "resumed", **options)
+    assert HPL.compare_historical_policies(rows, directory=tmp_path / "resumed", **options) == repaired
+    clean = HPL.compare_historical_policies(rows, directory=tmp_path / "clean", **options)
+    assert repaired["comparison"] == clean["comparison"]
+    assert repaired["branches"]["ADAPTIVE"]["trades"] == clean["branches"]["ADAPTIVE"]["trades"]
+    changed = repaired["comparison"]["decisions_changed"]
+    assert {r["symbol"]: r["effect"] for r in changed if r["day"] == days[4]} == {good: "SUPPORT", bad: "BLOCK"}
+    assert (repaired["comparison"]["adaptive_minus_frozen_pct"] < 0) == reversal
+    assert all(not r["affects_selection"] and r["production_status"] != "ACTIVE"
+               for r in load_policies(tmp_path / "resumed/ADAPTIVE/policies.json")["policies"])
+    assert production.read_text() == '{"policies":[]}'
+    assert json.dumps(rows, sort_keys=True) == original
+    assert external_reads == []
+    simulated = {"policy_id": "comparison", "dimension": "setup", "bucket": "positive-control",
+                 "production_status": "ACTIVE", "evidence_source": HISTORICAL_COMPARISON_SOURCE,
+                 "affects_selection": True, "expectancy_difference_R": 2, "sample_size": 40}
+    assert evaluate_policies({"setup_label": "positive-control"}, policies=[simulated])["final_effect"] == "NEUTRAL"
+    assert repaired["comparison"]["ADAPTIVE"]["paired_positive_rejection_rate"] == float(reversal)
+
+
+def test_comparison_refuses_reserve_future_inputs_and_unsafe_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    target = tmp_path / "comparison"
+    with pytest.raises(ValueError, match="reserved"):
+        HPL.compare_historical_policies([], official_sessions=["2025-11-01"], bars={}, directory=target, synthetic=True)
+    with pytest.raises(ValueError, match="future evidence"):
+        HPL.compare_historical_policies([{"as_of": "2025-04-01", "symbol": "TCS", "pit": {"max_bar_date": "2025-04-02"}}],
+                                        official_sessions=["2025-04-01"], bars={}, directory=target, synthetic=True)
+    with pytest.raises(ValueError, match="dedicated isolated"):
+        HPL.compare_historical_policies([], official_sessions=["2025-04-01"], bars={}, directory=tmp_path, synthetic=True)
+    target.mkdir()
+    (target / "ADAPTIVE").mkdir()
+    with pytest.raises(ValueError, match="not empty"):
+        HPL.compare_historical_policies([], official_sessions=["2025-04-01"], bars={}, directory=target, synthetic=True)
 
 
 def test_virtual_trade_same_bar_stop_and_target_is_conservative_stop_first():

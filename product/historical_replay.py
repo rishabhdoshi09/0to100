@@ -392,6 +392,10 @@ def _strongest_cards(workspace: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [dict(c) for c in flatten_cards(workspace) if isinstance(c, dict)]
 
 
+def selection_card_digest(card: Mapping[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(card, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
 def decide_session(
     as_of: str,
     scan_payload: Mapping[str, Any],
@@ -401,6 +405,7 @@ def decide_session(
     use_committee: bool | None = None,
     company_evidence: Sequence[Mapping[str, Any]] | None = None,
     calibration_snapshot_id: str = "",
+    bind_selection_card: bool = False,
 ) -> list[dict[str, Any]]:
     """Run the production recommendation + paper gate on a PIT scan payload.
 
@@ -598,6 +603,8 @@ def decide_session(
             from product.decision_taxonomy import is_judgment_row
 
             if is_judgment_row(out[-1]):
+                if bind_selection_card:
+                    out[-1]["data_snapshot_id"] = selection_card_digest(out[-1]["selection_card"])
                 frozen = freeze_decision(out[-1])
                 out[-1]["freeze_id"] = frozen.get("freeze_id")
                 out[-1]["evidence_fingerprint"] = frozen.get("fingerprint")

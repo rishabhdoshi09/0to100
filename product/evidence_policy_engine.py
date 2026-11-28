@@ -27,6 +27,7 @@ from product.learning_policy_store import (
     ACTIVE,
     ELIGIBLE,
     EXPERIMENTAL,
+    HISTORICAL_COMPARISON_SOURCE,
     load_policies,
 )
 
@@ -177,6 +178,7 @@ def evaluate_policies(
     regime: str = "",
     book=None,
     enforce_history: bool | None = None,
+    isolated_historical_comparison: bool = False,
 ) -> dict[str, Any]:
     """Return the empirical overlay for one candidate. Cannot create a BUY.
 
@@ -225,6 +227,10 @@ def evaluate_policies(
         if status not in {ACTIVE, ELIGIBLE, EXPERIMENTAL}:
             continue
         source = str(policy.get("evidence_source") or "")
+        if source == HISTORICAL_COMPARISON_SOURCE and not (
+            isolated_historical_comparison and injected and not enforce_history
+        ):
+            continue
         # Backtest never self-activates. Reproduced history may be ELIGIBLE for
         # paper exploration but remains live-locked.
         if source.startswith("backtest") and status == ACTIVE:

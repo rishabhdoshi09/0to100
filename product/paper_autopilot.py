@@ -404,7 +404,8 @@ def _empirical_fail(card: Mapping[str, Any]) -> bool:
     return True
 
 
-def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = None) -> float:
+def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = None,
+                    *, use_challenger: bool = True) -> float:
     """Rank among already-eligible names. The learner can only reorder them."""
     from product.decision_context import score_breakdown
     base = float(score_breakdown(card, policy).get("selection_rank") or 0.0)
@@ -413,6 +414,8 @@ def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = 
     # veto. Penalise it so clean-evidence setups rank first while still allowing
     # forward-paper evidence to accumulate when no stronger setup exists.
     empirical_penalty = 15.0 if _empirical_failed_methods(card) else 0.0
+    if not use_challenger:
+        return base - empirical_penalty
     try:
         from product.challenger_learning import paper_selection_adjustment
         learned = paper_selection_adjustment(card)
@@ -487,6 +490,7 @@ def _decorate(
     policy: Mapping[str, Any] | None,
     context: Mapping[str, Any] | None,
     evolution_policy: Mapping[str, Any] | None = None,
+    use_challenger: bool = True,
 ) -> AutopilotDecision:
     from product.decision_context import explain, score_breakdown
 
@@ -548,8 +552,11 @@ def _decorate(
 
     base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
     try:
-        from product.challenger_learning import paper_selection_adjustment
-        learned = paper_selection_adjustment(decision.card)
+        if use_challenger:
+            from product.challenger_learning import paper_selection_adjustment
+            learned = paper_selection_adjustment(decision.card)
+        else:
+            learned = {"available": False, "affects_selection": False, "adjustment": 0.0}
     except Exception:
         learned = {
             "available": False,
@@ -584,6 +591,7 @@ def evaluate_candidate(
     policy: Mapping[str, Any] | None = None,
     family_risk: dict | None = None,
     cluster_risk: dict | None = None,
+    isolated_book: bool = False,
 ) -> AutopilotDecision:
     """Gate one recommendation card. First hard-block wins. No silent skip."""
     symbol = str(card.get("symbol") or "").strip().upper()
@@ -706,10 +714,11 @@ def evaluate_candidate(
         # account_mutation_lock() right before the position is actually
         # opened in run_reco_paper_cycle().
         from risk.portfolio_risk import account_exposure_gate
-        gate = account_exposure_gate(symbol, sector=str(row.get("sector") or ""))
-        if not gate["ok"]:
-            kind = BLOCK if gate["reason_code"] == DUPLICATE_POSITION else PORTFOLIO_BLOCK
-            return AutopilotDecision(symbol, kind, gate["reason_code"], gate["detail"], row)
+        if not isolated_book:
+            gate = account_exposure_gate(symbol, sector=str(row.get("sector") or ""))
+            if not gate["ok"]:
+                kind = BLOCK if gate["reason_code"] == DUPLICATE_POSITION else PORTFOLIO_BLOCK
+                return AutopilotDecision(symbol, kind, gate["reason_code"], gate["detail"], row)
 
         from research.intelligence.schemas import TradeIntent
         ident = _identity()
@@ -770,6 +779,11 @@ def evaluate_candidate(
         from risk.portfolio_risk import _max_position_pct as _account_position_pct
         from risk.portfolio_risk import _risk_per_trade_pct as _account_risk_pct
         risk_capital = getattr(book, "risk_capital", None)
+        risk_fraction = float(getattr(book, "risk_per_trade_pct", 0.01) or 0.01)
+        position_fraction = float(getattr(book, "max_position_pct", 0.10) or 0.10)
+        if not isolated_book:
+            risk_fraction = min(risk_fraction, _account_risk_pct())
+            position_fraction = min(position_fraction, _account_position_pct())
         # Size INSIDE the account's configured caps, never only the book's: a
         # stricter account setting must shrink the trade, not let the shared
         # gate refuse a quantity the engine could have reduced (QT-C2-10).
@@ -781,8 +795,8 @@ def evaluate_candidate(
             entry=entry,
             stop=stop,
             requested_risk_pct=_risk_pct_for(card),
-            max_risk_fraction=min(float(getattr(book, "risk_per_trade_pct", 0.01) or 0.01), _account_risk_pct()),
-            max_position_fraction=min(float(getattr(book, "max_position_pct", 0.10) or 0.10), _account_position_pct()),
+            max_risk_fraction=risk_fraction,
+            max_position_fraction=position_fraction,
             slippage_bps=float(getattr(book, "slippage_bps", 0.0) or 0.0),
         )
         if not sizing.ok:
@@ -804,13 +818,14 @@ def evaluate_candidate(
             book_capital = float(book.risk_capital()) if hasattr(book, "risk_capital") else None
         except Exception:
             book_capital = None
-        gate = account_exposure_gate(
-            symbol, qty=int(sizing.quantity), entry=float(sizing.effective_entry),
-            stop=float(stop), sector=str(row.get("sector") or ""), capital_base=book_capital,
-        )
-        if not gate["ok"]:
-            kind = BLOCK if gate["reason_code"] == DUPLICATE_POSITION else PORTFOLIO_BLOCK
-            return AutopilotDecision(symbol, kind, gate["reason_code"], gate["detail"], row)
+        if not isolated_book:
+            gate = account_exposure_gate(
+                symbol, qty=int(sizing.quantity), entry=float(sizing.effective_entry),
+                stop=float(stop), sector=str(row.get("sector") or ""), capital_base=book_capital,
+            )
+            if not gate["ok"]:
+                kind = BLOCK if gate["reason_code"] == DUPLICATE_POSITION else PORTFOLIO_BLOCK
+                return AutopilotDecision(symbol, kind, gate["reason_code"], gate["detail"], row)
         cap = float(getattr(book, "capital", 0.0) or 0.0)
         cash = cap + float(getattr(book, "realized_pnl", 0.0) or 0.0)
         notional = sizing.effective_entry * sizing.quantity
@@ -825,7 +840,7 @@ def evaluate_candidate(
     row["entry"] = entry
     row["stop"] = stop
     row["target"] = target
-    score = selection_score(row, policy)
+    score = selection_score(row, policy, use_challenger=False) if isolated_book else selection_score(row, policy)
     return AutopilotDecision(
         symbol, ENTER_NOW, "ELIGIBLE", "passed all gates", row,
         selection_score=score,
@@ -849,6 +864,7 @@ def evaluate_selection_candidate(
     family_risk: dict | None = None,
     cluster_risk: dict | None = None,
     evolution_policy: Mapping[str, Any] | None = None,
+    isolated_book: bool = False,
 ) -> AutopilotDecision:
     """Canonical selection-thesis evaluation without execution.
 
@@ -873,6 +889,7 @@ def evaluate_selection_candidate(
         regime=regime,
         book=book,
         enforce_history=enforce_history,
+        **({"isolated_historical_comparison": True} if isolated_book else {}),
     )
     decision = evaluate_candidate(
         merged,
@@ -886,8 +903,10 @@ def evaluate_selection_candidate(
         policy=policy,
         family_risk=family_risk,
         cluster_risk=cluster_risk,
+        **({"isolated_book": True} if isolated_book else {}),
     )
-    return _decorate(decision, policy=policy, context=ctx, evolution_policy=evolution_policy)
+    return _decorate(decision, policy=policy, context=ctx, evolution_policy=evolution_policy,
+                     use_challenger=not isolated_book)
 
 
 def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):

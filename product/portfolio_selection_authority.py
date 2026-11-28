@@ -172,9 +172,9 @@ def allocate(
 
     rows = [dict(r) for r in eligible]
     corr_meta: dict[str, Any] = {
-        "source": "caller_supplied" if correlations is not None else "unavailable",
-        "point_in_time": correlations is not None,
-        "coverage": 1.0 if correlations is not None else 0.0,
+        "source": "caller_supplied" if correlations else "unavailable",
+        "point_in_time": bool(correlations),
+        "coverage": 1.0 if correlations else 0.0,
         "as_of": "",
         "network_used": False,
     }

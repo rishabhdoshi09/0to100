@@ -21,6 +21,7 @@ from core.runtime_paths import logs_dir
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATH = logs_dir() / "product" / "learning_policies.json"
 SCHEMA_VERSION = 1
+HISTORICAL_COMPARISON_SOURCE = "isolated_historical_policy_comparison"
 
 OBSERVING = "OBSERVING"
 EXPERIMENTAL = "EXPERIMENTAL"
@@ -188,6 +189,8 @@ def upsert_policy(
     if regime and regime not in regimes:
         regimes.append(regime)
     affects = extra_payload.pop("affects_selection", True)
+    if source == HISTORICAL_COMPARISON_SOURCE:
+        affects = False
     row = {
         "policy_id": policy_id,
         "version": version,

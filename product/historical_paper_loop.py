@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from core.runtime_paths import logs_path
+from product.learning_policy_store import HISTORICAL_COMPARISON_SOURCE
 
 SCHEMA_VERSION = 2
 PHASE_IDLE = "IDLE"
@@ -520,6 +521,7 @@ def simulate_paper_book_sequence(
     later_bars_fn: Callable[..., list[dict[str, Any]]] | None = None,
     horizon: int = DEFAULT_HORIZON_SESSIONS,
     max_new_per_session: int = 3,
+    _comparison=None,
 ) -> dict[str, Any]:
     """Replay historical BUY decisions through the real PaperBook mechanics.
 
@@ -567,29 +569,63 @@ def simulate_paper_book_sequence(
     bar_cache: dict[str, dict[str, tuple[float, ...]]] = {}
     source_by_intent: dict[str, dict[str, Any]] = {}
     rejections: list[dict[str, Any]] = []
+    decisions_made = []
+    daily = []
+    current = ""
+    if _comparison is not None:
+        saved = _comparison.load()
+        if saved:
+            book.restore(saved["book"], strict=True)
+            source_by_intent = saved["sources"]
+            rejections = saved["rejections"]
+            decisions_made = saved["decisions"]
+            daily = saved["daily"]
+            current = saved["session"]
+
+    def checkpoint(day):
+        if _comparison is not None:
+            daily.append({"day": day, "equity": book.equity(_comparison.bars.get(day, {})),
+                          "deployed": sum(p.entry_price * p.qty for p in book.open.values()),
+                          "open_risk": sum(p.risk_amount for p in book.open.values())})
+            _comparison.save({"session": day, "book": book.snapshot(), "sources": source_by_intent,
+                              "rejections": rejections, "decisions": decisions_made, "daily": daily})
 
     for day in sessions:
+        if day <= current:
+            continue
         # First settle/manage positions opened on earlier sessions using only
         # this session's official bar.
         bars: dict[str, tuple[float, ...]] = {}
         for pos in list(book.open.values()):
-            bar = (bar_cache.get(str(pos.symbol).upper()) or {}).get(day)
+            if _comparison is None:
+                bar = (bar_cache.get(str(pos.symbol).upper()) or {}).get(day)
+            else:
+                bar = _comparison.bars.get(day, {}).get(pos.symbol)
+                if bar is None:
+                    raise ValueError(f"Missing held-symbol archive bar: {pos.symbol} on {day}")
             if bar is not None:
                 bars[str(pos.symbol).upper()] = bar
         if bars:
-            book.mark(bars, day, allow_entry_session=False)
+            closed_today = book.mark(bars, day, allow_entry_session=False)
+            if _comparison is not None:
+                _comparison.learn(closed_today, source_by_intent, day)
 
         raw_day = candidates.get(day) or []
         if not raw_day:
+            checkpoint(day)
             continue
 
         ranked = []
         from product.paper_autopilot import carried_sector_risk
         family_risk, cluster_risk = carried_sector_risk(book)
         clock = datetime.fromisoformat(f"{day}T15:30:00+05:30")
+        policies = _comparison.policies(day) if _comparison is not None else None
+        rejected_today = []
         for row in raw_day:
             card = row.get("selection_card")
             card = dict(card) if isinstance(card, Mapping) else {}
+            if _comparison is not None:
+                card.pop("selection_score", None)
             if not card:
                 # Compatibility for old persisted replays: do not fabricate
                 # missing PIT inputs. Such rows can be inspected but are not
@@ -615,8 +651,11 @@ def simulate_paper_book_sequence(
                     enforce_history=False,
                     family_risk=family_risk,
                     cluster_risk=cluster_risk,
+                    **({"policies": policies, "isolated_book": True} if _comparison is not None else {}),
                 )
             except Exception as exc:
+                if _comparison is not None:
+                    raise
                 rejections.append({
                     "symbol": str(row.get("symbol") or "").upper(),
                     "as_of": day,
@@ -628,23 +667,27 @@ def simulate_paper_book_sequence(
                 rejected = decision.as_dict()
                 rejected["as_of"] = day
                 rejections.append(rejected)
+                rejected_today.append(decision)
                 continue
             ranked.append((float(decision.selection_score or 0.0), decision))
 
         ranked.sort(key=lambda item: (-item[0], item[1].symbol))
-        if not ranked:
-            continue
-
         kept, diverted = apply_portfolio_authority(
             ranked,
             book=book,
             max_new=max_new_per_session,
             regime=str(raw_day[0].get("regime") or "UNKNOWN"),
+            **({"correlations": {}} if _comparison is not None else {}),
         )
         for decision in diverted:
             rejected = decision.as_dict()
             rejected["as_of"] = day
             rejections.append(rejected)
+
+        if _comparison is not None:
+            day_decisions = {decision.symbol: _comparison.freeze(day, decision)
+                             for decision in [*rejected_today, *diverted, *(d for _, d in kept)]}
+            decisions_made.extend(day_decisions.values())
 
         for _score, decision in kept:
             row = next(
@@ -669,7 +712,8 @@ def simulate_paper_book_sequence(
                 int(horizon),
                 risk_pct_of_capital=DEFAULT_RISK_PCT,
                 quantity=(qty if qty > 0 else None),
-                decision_id=str(row.get("canonical_decision_id") or ""),
+                decision_id=(day_decisions[decision.symbol]["freeze_id"] if _comparison is not None
+                             else str(row.get("canonical_decision_id") or "")),
                 paper_intent_id=intent_id,
                 context_key=str(row.get("context_key") or ""),
             )
@@ -692,6 +736,9 @@ def simulate_paper_book_sequence(
             cluster_risk[family] = cluster_risk.get(family, 0.0) + DEFAULT_RISK_PCT
             source_by_intent[intent_id] = dict(row)
 
+            if _comparison is not None:
+                continue
+
             future = list(
                 later_bars_fn(decision.symbol, day, horizon=int(horizon)) or []
             )
@@ -704,6 +751,7 @@ def simulate_paper_book_sequence(
                 if bar_day and bar is not None:
                     by_date[bar_day] = bar
             bar_cache[decision.symbol] = by_date
+        checkpoint(day)
 
     trades: list[dict[str, Any]] = []
     for closed in book.closed:
@@ -756,9 +804,232 @@ def simulate_paper_book_sequence(
         "open_unresolved": len(book.open),
         "book": book.snapshot(),
         "execution_model": "PaperBook",
+        **({"decisions": decisions_made, "daily": daily} if _comparison is not None else {}),
         "slippage_bps": 3.0,
         "cost_model": "india_cash_costs",
     }
+
+
+class _HistoricalPolicyComparison:
+    """Private adapter around the existing selector, book and policy ledger."""
+
+    SOURCE = HISTORICAL_COMPARISON_SOURCE
+
+    def __init__(self, path, bars, *, adaptive, floors):
+        self.path = path
+        self.bars = bars
+        self.adaptive = adaptive
+        self.floors = floors
+        self.store = path / "policies.json"
+        self.checkpoint = path / "checkpoint.json"
+
+    def load(self):
+        return json.loads(self.checkpoint.read_text()) if self.checkpoint.exists() else None
+
+    def save(self, payload):
+        from core.atomic_io import atomic_write_text
+
+        atomic_write_text(self.checkpoint, json.dumps(payload, sort_keys=True, allow_nan=False), durable=True)
+
+    def learn(self, trades, sources, day):
+        from product.learning_policy_store import record_measured_outcome
+
+        if not self.adaptive:
+            return
+        for trade in trades:
+            if not trade.entry_date < trade.exit_date == day:
+                raise ValueError("Only matured prior-session trades can update the comparison")
+            source = sources[trade.paper_intent_id]
+            card = source["selection_card"]
+            setup = str(card.get("setup_label") or card.get("primary_thesis") or "")
+            if setup:
+                record_measured_outcome(
+                    policy_id=f"SETUP::{setup}", dimension="setup", bucket=setup,
+                    realized_R=trade.realized_R, source=self.SOURCE, path=self.store,
+                    session=trade.entry_date, observation_key=trade.paper_intent_id,
+                    floors=self.floors, extra={"affects_selection": False, "last_matured_session": day,
+                                                "not_promotion_evidence": True},
+                )
+
+    def policies(self, day):
+        from product.learning_policy_store import _status_for, load_policies
+
+        if not self.adaptive:
+            return []
+        projected = []
+        for row in load_policies(self.store)["policies"]:
+            if (row.get("evidence_source") != self.SOURCE or row.get("affects_selection") is not False
+                    or not row.get("last_matured_session") or row["last_matured_session"] > day):
+                raise ValueError("Foreign or future evidence in isolated policy store")
+            status = _status_for(row["sample_size"], abs(row["shrunk_expectancy_R"]), floors=self.floors,
+                                 sessions=row["sessions_observed"])
+            # Only the in-memory selector view ever gains simulated authority.
+            projected.append({**row, "production_status": status, "affects_selection": True,
+                              "confidence": "MEASURED" if status in {"ACTIVE", "ELIGIBLE"} else "INSUFFICIENT_EVIDENCE"})
+        return projected
+
+    def freeze(self, day, decision):
+        from product.decision_freeze import freeze
+
+        return freeze({**decision.as_dict(), "as_of": day, "decision_id": f"{day}:{decision.symbol}",
+                       "evidence_class": "HISTORICAL_REPLAY", "portfolio": decision.portfolio}, path=self.path / "decisions.sqlite")
+
+
+def _comparison_metrics(branches, horizon):
+    from research.auto_research.costs import india_cash_costs
+    from research.overlap_inference import overlap_robust_test
+
+    def summarize(result):
+        capital = result["book"]["capital"]
+        daily = result["daily"]
+        trades = result["trades"]
+        peak = capital
+        drawdown = 0.0
+        returns = []
+        last = capital
+        for row in daily:
+            equity = row["equity"]
+            peak = max(peak, equity)
+            drawdown = max(drawdown, 1 - equity / peak)
+            returns.append(equity / last - 1)
+            last = equity
+        traded = sum((t["entry_price"] + t["exit_price"]) * t["qty"] for t in trades)
+        traded += sum(t["entry_price"] * t["qty"] for t in result["book"]["open"])
+        return {
+            "settled_trades": len(trades), "unresolved_trades": result["open_unresolved"],
+            "mean_net_R": sum(t["realized_R"] for t in trades) / len(trades) if trades else None,
+            "mean_net_return_pct": sum(t["return_pct"] for t in trades) / len(trades) if trades else None,
+            "portfolio_return_pct": (last / capital - 1) * 100,
+            "max_drawdown_pct": drawdown * 100, "daily_returns": returns,
+            "turnover_multiple": traded / capital,
+            "settled_cash_costs": sum(india_cash_costs(t["entry_price"], t["exit_price"], t["qty"]) for t in trades),
+            "mean_capital_deployed_pct": 100 * sum(r["deployed"] for r in daily) / (len(daily) * capital),
+            "max_open_risk_pct": 100 * max(r["open_risk"] for r in daily) / capital,
+            "calibration": "UNMEASURED", "incorrect_rejections": "UNMEASURED",
+        }
+
+    out = {name: summarize(result) for name, result in branches.items()}
+    adaptive, frozen = out["ADAPTIVE"], out["FROZEN"]
+    def choices(result):
+        return {(r["as_of"], r["symbol"]): r for r in result["decisions"]}
+
+    fixed = choices(branches["FROZEN"])
+    adaptive_choices = choices(branches["ADAPTIVE"])
+    altered = []
+    for key, row in adaptive_choices.items():
+        base = fixed[key]
+        if (row["decision"], row["reason_code"], row["policy_effect"]) != (base["decision"], base["reason_code"], base["policy_effect"]):
+            altered.append({"day": key[0], "symbol": key[1], "frozen": base["decision"],
+                            "adaptive": row["decision"], "effect": row["policy_effect"], "reason": row["reason_code"]})
+    from product.paper_autopilot import ENTER_NOW
+
+    for name, other, decisions in (("FROZEN", "ADAPTIVE", fixed), ("ADAPTIVE", "FROZEN", adaptive_choices)):
+        omitted = [t for t in branches[other]["trades"]
+                   if decisions[(t["entry_date"], t["symbol"])]["decision"] != ENTER_NOW]
+        out[name]["paired_rejection_observations"] = len(omitted)
+        out[name]["paired_positive_rejection_rate"] = (
+            sum(t["net_pnl"] > 0 for t in omitted) / len(omitted) if omitted else None)
+    paired = {i: (a - f, 1) for i, (a, f) in enumerate(zip(adaptive["daily_returns"], frozen["daily_returns"]))}
+    return {**out, "decisions_changed": altered,
+            "adaptive_minus_frozen_pct": adaptive["portfolio_return_pct"] - frozen["portfolio_return_pct"],
+            "paired_daily_inference": overlap_robust_test(paired, horizon)}
+
+
+def compare_historical_policies(decisions, *, official_sessions, bars, directory, synthetic=False,
+                                floors=None, horizon=DEFAULT_HORIZON_SESSIONS, max_new_per_session=3):
+    """Compare fixed and updating selection using one bounded historical input.
+
+    Input decisions are frozen cards from the ordinary PIT replay. The explicit
+    synthetic mode is for control fixtures, including lower test sample floors.
+    Neither branch may access the live runtime or forward champion.
+    """
+    import os
+    import sqlite3
+    from contextlib import closing
+    from datetime import date, timedelta
+    from core.atomic_io import atomic_write_text
+    from core.evaluation_spec import BREAKEVEN_TRIGGER_PCT
+    from core.live_volume import on_live_volume
+    from core.runtime_paths import REPO_ROOT, runtime_root
+    from gauntlet.geometry import _code_digest
+    from product import learning_observations
+
+    root = runtime_root().resolve(strict=True)
+    target = Path(directory).resolve()
+    if (not os.environ.get("QT_RUNTIME_ROOT") or root == REPO_ROOT or root == target
+            or not target.is_relative_to(root) or on_live_volume(root) or os.statvfs(root).f_flag & os.ST_RDONLY
+            or any(path.is_symlink() for path in target.rglob("*"))):
+        raise ValueError("Use a dedicated isolated writable historical comparison directory")
+    sessions = list(official_sessions)
+    if (sessions != sorted(set(sessions)) or not sessions or any(date.fromisoformat(day).isoformat() != day for day in sessions)
+            or sessions[-1] >= "2025-11-01" or (floors is not None and not synthetic)
+            or not 1 <= horizon <= DEFAULT_HORIZON_SESSIONS or not 1 <= max_new_per_session <= 3):
+        raise ValueError("Invalid comparison chronology or reserved-period overlap")
+    rows = [dict(row) for row in decisions]
+    seen = set()
+    for row in rows:
+        identity = (row.get("as_of"), str(row.get("symbol") or "").upper())
+        pit = row.get("pit") or {}
+        if (identity in seen or identity[0] not in sessions or not identity[1]
+                or (not synthetic and (row.get("provenance") != "HISTORICAL_REPLAY" or not row.get("freeze_id")
+                                        or not pit.get("max_bar_date") or pit["max_bar_date"] > identity[0]))
+                or pit.get("future_evidence_used") or (pit.get("max_bar_date") or "") > identity[0]):
+            raise ValueError("Expected unique, frozen PIT decisions without future evidence")
+        seen.add(identity)
+    if not synthetic:
+        from product.decision_freeze import freeze_path, evidence_fingerprint
+        from product.historical_replay import selection_card_digest
+        from research.intelligence.data import nse_calendar as calendar
+
+        metadata = root / "logs"
+        paths = [metadata / "nse_holidays.json", metadata / "nse_calendar_manifest.json", freeze_path()]
+        if any(not path.resolve().is_relative_to(root) for path in paths):
+            raise ValueError("Comparison calendar and decision freeze must stay inside its runtime")
+        holidays = set(json.loads(paths[0].read_text()))
+        calendar_manifest = calendar.load_manifest(paths[1])
+        first, last = date.fromisoformat(sessions[0]), date.fromisoformat(sessions[-1])
+        if calendar.calendar_gap(first, last, holidays, calendar_manifest):
+            raise ValueError("Comparison requires a verified exchange calendar")
+        special = calendar.documented_special_sessions(calendar_manifest)
+        days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
+        expected = [day.isoformat() for day in days if calendar.is_session(day, holidays) or day.isoformat() in special]
+        if expected != sessions:
+            raise ValueError("Comparison requires every consecutive official session")
+        if rows:
+            with closing(sqlite3.connect(paths[2].resolve().as_uri() + "?mode=ro", uri=True)) as reader:
+                for row in rows:
+                    stored = reader.execute("SELECT fingerprint FROM freezes WHERE freeze_id=?", (row["freeze_id"],)).fetchone()
+                    card = row.get("selection_card")
+                    if (not isinstance(card, Mapping)
+                            or row.get("data_snapshot_id") != selection_card_digest(card)
+                            or stored != (evidence_fingerprint(row),)):
+                        raise ValueError("Comparison decision does not match its immutable PIT freeze")
+    inputs = json.dumps([rows, sessions, bars, synthetic, floors, horizon, max_new_per_session,
+                         BREAKEVEN_TRIGGER_PCT, _code_digest()],
+                        sort_keys=True, allow_nan=False)
+    binding = hashlib.sha256(inputs.encode()).hexdigest()
+    target.mkdir(parents=True, exist_ok=True)
+    with learning_observations.writer_lock(target / "comparison"):
+        manifest = target / "binding.json"
+        if manifest.exists():
+            if manifest.read_text() != binding:
+                raise ValueError("Comparison inputs differ from the saved experiment")
+        else:
+            if any(path.name != "comparison.lock" for path in target.iterdir()):
+                raise ValueError("Unbound comparison directory is not empty")
+            atomic_write_text(manifest, binding, durable=True)
+        branches = {}
+        for name in ("FROZEN", "ADAPTIVE"):
+            path = target / name
+            path.mkdir(exist_ok=True)
+            context = _HistoricalPolicyComparison(path, bars, adaptive=(name == "ADAPTIVE"), floors=floors)
+            branches[name] = simulate_paper_book_sequence(
+                rows, official_sessions=sessions, horizon=horizon, max_new_per_session=max_new_per_session,
+                _comparison=context,
+            )
+        return {"binding": binding, "synthetic": synthetic, "evidence_class": "HISTORICAL_REPLAY",
+                "not_promotion_evidence": True, "live_locked": True, "branches": branches,
+                "comparison": _comparison_metrics(branches, horizon)}
 
 
 def _normal_cdf(z: float) -> float:

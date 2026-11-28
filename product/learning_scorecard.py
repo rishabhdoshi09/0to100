@@ -1010,7 +1010,7 @@ def home_summary(card: Mapping[str, Any] | None = None) -> dict[str, Any]:
     top = (cal.get("reliability") or [{}])[-1] if cal.get("reliability") else {}
     verdict = sig.get("verdict") or INSUFFICIENT
     headline = (
-        f"No proven edge yet: tracked BUYs {sig.get('mean_of_session_means_R')}R per session over "
+        f"NO VALIDATED EDGE · tracked BUYs {sig.get('mean_of_session_means_R')}R per session over "
         f"{sig.get('sessions')} sessions (95% CI {sig.get('ci95_R')}) - {verdict.lower()}."
         if verdict != CREDIBLE_POSITIVE
         else f"Tracked BUYs net positive: {sig.get('mean_of_session_means_R')}R per session (CI {sig.get('ci95_R')})."

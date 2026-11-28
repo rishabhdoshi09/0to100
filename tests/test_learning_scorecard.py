@@ -242,7 +242,7 @@ def test_home_summary_never_reads_unproven_evidence_as_an_edge():
                               include_challengers=False)
     out = LS.home_summary(card)
     assert out["available"] is True
-    assert out["headline"].startswith("No proven edge yet")
+    assert out["headline"].startswith("NO VALIDATED EDGE")
     assert out["net_edge"]["verdict"] == LS.INSUFFICIENT
     assert out["verdicts"]["AUTONOMOUS LIVE ELIGIBLE"] == "NOT ELIGIBLE"
     assert out["blockers"]["FORWARD PAPER READY"]
