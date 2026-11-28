@@ -34,7 +34,7 @@ def checkpoint(monkeypatch):
                 ["2025-01-01", study.END, {"scanner": [study.HORIZON]}, 2.0, binding]),))
             db.executemany("INSERT INTO geometry_done VALUES (?)", [(s,) for s in names])
             db.executemany("INSERT INTO geometry_observations VALUES (?,?,?,?)", [
-                (s, days[1], json.dumps({"momentum_20": i/100, "turnover_20": 1e9, "signals": []}),
+                (s, days[1], json.dumps({"momentum_20": i/100, "turnover_20": 1e9, "volatility_20": 0.02, "signals": []}),
                  json.dumps({"open_to_close_return": (49-i)/100, "next_open_gap": 0.01}))
                 for i, s in enumerate(names)
             ])
@@ -71,3 +71,51 @@ def test_refuses_contaminated_checkpoint_and_escaping_lock(checkpoint):
     with pytest.raises(ValueError, match="discovery-only"):
         study.run(checkpoint)
     assert not registry._DB_PATH.exists()
+
+
+def test_programme_continues_after_interrupt_and_data_block(checkpoint, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from research.autonomy import discovery_programme as programme
+
+    baseline = study.run(checkpoint)
+    original = programme._measure
+
+    def interrupted(*args):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(programme, "_measure", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            study.run(checkpoint, programme_slot=1)
+
+    [(row, spec)] = programme.rows()
+    assert row["status"] == "RUNNING" and row["result"] is None
+    assert programme.next_slot() == 1
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        left, right = pool.map(lambda _: study.run(checkpoint, programme_slot=1), range(2))
+    assert {left["decision"], right["decision"]} == {"DISCOVERY_COMPLETE", "DISCOVERY_ALREADY_COMPLETED"}
+    assert left["hypothesis_id"] == right["hypothesis_id"] == row["hypothesis_id"]
+    assert left["blocked_dependencies"] == {"sector": "historical_sector_membership"}
+
+    with monkeypatch.context() as patch:
+        patch.setattr(programme, "_measure", lambda *_: (_ for _ in ()).throw(ValueError("invalid fixture")))
+        failed = study.run(checkpoint, programme_slot=2)
+    assert failed["decision"] == "DISCOVERY_FAILED"
+    assert failed["budget_used"] == 2
+    assert programme._measure is original
+    last = study.run(checkpoint, programme_slot=3)
+    assert last["decision"] == "DISCOVERY_COMPLETE"
+    assert programme.scheduler_key() is None
+    assert registry.record_result(last["hypothesis_id"], {})["error"] == "discovery_only"
+    assert registry.get_experiment(baseline["hypothesis_id"])["status"] == "INCONCLUSIVE"
+
+
+def test_programme_refuses_duplicate_slot_records(checkpoint):
+    from research.autonomy import discovery_programme as programme
+
+    for family in ("continuation", "liquidity"):
+        registry.register_hypothesis(family, {}, {
+            "stage": "DISCOVERY", "programme": programme.PROGRAMME, "slot": 1, "family": family,
+        })
+    with pytest.raises(ValueError, match="conflicting spend"):
+        programme.next_slot()

@@ -202,6 +202,22 @@ def record_result(hypothesis_id_: str, metrics: dict) -> dict:
     return {"status": status, "passed": passed}
 
 
+def start_discovery(hypothesis_id_: str) -> None:
+    """Record a spent discovery slot before computation, including interrupted runs."""
+    c = _conn()
+    try:
+        updated = c.execute(
+            """UPDATE experiments SET status='RUNNING'
+               WHERE hypothesis_id=? AND status IN ('REGISTERED','RUNNING') AND result IS NULL
+               AND json_extract(data_window, '$.stage')='DISCOVERY'""", (hypothesis_id_,),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Discovery is unavailable to start")
+        c.commit()
+    finally:
+        c.close()
+
+
 def record_discovery_result(hypothesis_id_: str, result: dict) -> None:
     """Commit a discovery exactly once without producing a promotion record."""
     status = result["status"]
@@ -212,7 +228,7 @@ def record_discovery_result(hypothesis_id_: str, result: dict) -> None:
     try:
         updated = c.execute(
             """UPDATE experiments SET result=?, status=?, evaluated_at=?
-               WHERE hypothesis_id=? AND status='REGISTERED' AND result IS NULL
+               WHERE hypothesis_id=? AND status IN ('REGISTERED','RUNNING') AND result IS NULL
                AND json_extract(data_window, '$.stage')='DISCOVERY'""",
             (payload, status, time.strftime("%Y-%m-%dT%H:%M:%S"), hypothesis_id_),
         )

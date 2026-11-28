@@ -319,6 +319,7 @@ class Supervisor:
                         or key.startswith("hist_research:")
                         or key.startswith("research_replan:")
                         or key == SCH.OUTCOME_DISCOVERY_KEY
+                        or key.startswith(SCH.OUTCOME_PROGRAMME_PREFIX)
                     )
                 elif job.job_type == SCH.HISTORICAL_PAPER_CYCLE:
                     retire = not key.startswith("hist_paper:")
@@ -952,7 +953,15 @@ class Supervisor:
             except (ValueError, FileNotFoundError):
                 discovery = None
             if discovery is not None and self._resource_budget().get("historical_replay_allowed"):
-                self.jobs.enqueue(SCH.RESEARCH_CYCLE, idempotency_key=SCH.OUTCOME_DISCOVERY_KEY)
+                from research.autonomy.discovery_programme import scheduler_key
+
+                try:
+                    key = scheduler_key()
+                except ValueError as exc:
+                    self._incident("DISCOVERY_PROGRAMME_BLOCKED", str(exc))
+                else:
+                    if key:
+                        self.jobs.enqueue(SCH.RESEARCH_CYCLE, idempotency_key=key)
 
         # Closed market starts by finding today's best available trades from the
         # latest completed official session. Once fresh discovery is ready, the

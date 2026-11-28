@@ -165,7 +165,7 @@ def _digest(path, identity):
     return digest
 
 
-def run(checkpoint: Path) -> dict:
+def run(checkpoint: Path, *, programme_slot: int | None = None) -> dict:
     from product.learning_observations import writer_lock
 
     source = _isolated_checkpoint(checkpoint)
@@ -197,6 +197,13 @@ def run(checkpoint: Path) -> dict:
             description = f"{WINDOW['hypothesis']} Gauntlet SHA-256 {source_hash}."
             hid = registry.register_hypothesis(NAME, CRITERIA, WINDOW, description, code_hash=code_hash)
             existing = registry.get_experiment(hid)
+            if programme_slot is not None and not existing["result"]:
+                raise ValueError("Programme requires a completed baseline discovery")
+            if existing["result"] and programme_slot is not None:
+                from research.autonomy.discovery_programme import _advance
+
+                return _advance(programme_slot, connection, days, symbols, existing, source_hash,
+                               lambda: _digest(source, identity) == source_hash)
             if existing["result"]:
                 return {"decision": "DISCOVERY_BUDGET_EXHAUSTED", "hypothesis_id": hid, **json.loads(existing["result"])}
             if existing["code_hash"] != code_hash or existing["description"] != description:

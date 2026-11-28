@@ -83,8 +83,8 @@ def _experiments() -> dict:
         protocol = json.loads(row["data_window"])
         result = json.loads(row.get("result") or "{}")
         latest = {
-            "name": row["name"], "status": row["status"], "rationale": protocol.get("motivation"),
-            "pending": sum(e["status"] == "REGISTERED" for e in discovery),
+            "name": row["name"], "status": row["status"], "rationale": protocol.get("motivation") or row.get("description"),
+            "pending": sum(e["status"] in {"REGISTERED", "RUNNING"} for e in discovery),
             "completed": sum(bool(e.get("result")) for e in discovery),
             "next": result.get("next"), "elapsed_seconds": result.get("elapsed_seconds"),
             "metrics": result.get("metrics", {}),
