@@ -274,6 +274,7 @@ function ResearchDirectorPanel({ data }: { data: ResearchDirectorStatus | null }
   const learned = data.challengers?.learned || {}
   const dossier = learned.promotion_dossier || {}
   const governor = data.resource_governor || {}
+  const discovery = data.research_health?.outcome_discovery
   const stateTruth = data.state_truth || {}
   const batchWindow = batch.sessions?.length
     ? `${batch.sessions[0]} → ${batch.sessions[batch.sessions.length - 1]} · ${batch.sessions.length} sessions`
@@ -307,6 +308,20 @@ function ResearchDirectorPanel({ data }: { data: ResearchDirectorStatus | null }
         {batch.outcome_blind_selection === true ? ' · outcome-blind selection' : ''}
       </p>
       <p className="panel-copy"><strong>Next action:</strong> {data.next_action || 'No explicit next action persisted.'}</p>
+
+      {discovery && (
+        <div>
+          <p className="panel-copy"><strong>{discovery.name}</strong> · {discovery.status} · {discovery.completed} completed, {discovery.pending} pending{discovery.elapsed_seconds == null ? '' : ` · ${discovery.elapsed_seconds}s`}</p>
+          <p className="panel-copy">{discovery.rationale}</p>
+          <p className="panel-copy">
+            Net expectancy {discovery.metrics?.expected_net_return == null ? 'UNMEASURED' : `${(100 * discovery.metrics.expected_net_return).toFixed(2)}%`}
+            {discovery.metrics?.excess_inference?.mean == null ? '' : ` · excess ${(100 * discovery.metrics.excess_inference.mean).toFixed(2)} pp`}
+            {discovery.metrics?.excess_inference?.ci95 ? ` · 95% CI [${discovery.metrics.excess_inference.ci95.map(x => (100 * x).toFixed(2)).join(', ')}] pp` : ''}
+            {discovery.metrics?.excess_inference?.reason ? ` · ${discovery.metrics.excess_inference.reason}` : ''}
+          </p>
+          {discovery.next && <p className="panel-copy"><strong>Next:</strong> {discovery.next.toLowerCase().replaceAll('_', ' ')}</p>}
+        </div>
+      )}
 
       <div className="fact-grid">
         <div><span>Last-batch evidence added</span><strong>{delta?.last_batch_evidence_added ?? 0}</strong></div>

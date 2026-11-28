@@ -310,6 +310,7 @@ def build_research_director_status() -> dict[str, Any]:
             },
         },
         "research_health": {
+            "outcome_discovery": (overview.get("research_health") or {}).get("outcome_discovery"),
             "knowledge_growth": dict(overview.get("knowledge_growth") or {}),
             "edge_health": dict(overview.get("edge_health") or {}),
             "gate_scorecard": list(overview.get("gate_scorecard") or [])[:12],

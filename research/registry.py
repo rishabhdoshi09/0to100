@@ -182,11 +182,13 @@ def record_result(hypothesis_id_: str, metrics: dict) -> dict:
     safe: a second call updates the result but the verdict is deterministic."""
     c = _conn()
     try:
-        row = c.execute("SELECT success_criteria FROM experiments WHERE "
+        row = c.execute("SELECT success_criteria, data_window FROM experiments WHERE "
                         "hypothesis_id=?", (hypothesis_id_,)).fetchone()
         if row is None:
             return {"error": "not_registered",
                     "note": "Result refused — hypothesis was never pre-registered."}
+        if json.loads(row["data_window"] or "{}").get("stage") == "DISCOVERY":
+            return {"error": "discovery_only"}
         criteria = json.loads(row["success_criteria"] or "{}")
         passed = meets_criteria(metrics, criteria)
         status = "PROMOTED" if passed else "REJECTED"
@@ -198,6 +200,27 @@ def record_result(hypothesis_id_: str, metrics: dict) -> dict:
     finally:
         c.close()
     return {"status": status, "passed": passed}
+
+
+def record_discovery_result(hypothesis_id_: str, result: dict) -> None:
+    """Commit a discovery exactly once without producing a promotion record."""
+    status = result["status"]
+    if status not in {"PROMISING", "INCONCLUSIVE", "REJECTED"} or result.get("promotion_eligible") is not False:
+        raise ValueError("Invalid discovery result")
+    payload = json.dumps(result, sort_keys=True, allow_nan=False)
+    c = _conn()
+    try:
+        updated = c.execute(
+            """UPDATE experiments SET result=?, status=?, evaluated_at=?
+               WHERE hypothesis_id=? AND status='REGISTERED' AND result IS NULL
+               AND json_extract(data_window, '$.stage')='DISCOVERY'""",
+            (payload, status, time.strftime("%Y-%m-%dT%H:%M:%S"), hypothesis_id_),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Discovery is unregistered or already completed")
+        c.commit()
+    finally:
+        c.close()
 
 
 def get_experiment(hypothesis_id_: str) -> dict | None:

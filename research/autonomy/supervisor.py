@@ -318,6 +318,7 @@ class Supervisor:
                         key.startswith("forward_research:")
                         or key.startswith("hist_research:")
                         or key.startswith("research_replan:")
+                        or key == SCH.OUTCOME_DISCOVERY_KEY
                     )
                 elif job.job_type == SCH.HISTORICAL_PAPER_CYCLE:
                     retire = not key.startswith("hist_paper:")
@@ -942,6 +943,16 @@ class Supervisor:
             ):
                 self._ensure_startup_trade_discovery()
             return
+
+        if os.environ.get("QT_OUTCOME_DISCOVERY_CHECKPOINT"):
+            from research.autonomy.outcome_discovery import configured_checkpoint
+
+            try:
+                discovery = configured_checkpoint()
+            except (ValueError, FileNotFoundError):
+                discovery = None
+            if discovery is not None and self._resource_budget().get("historical_replay_allowed"):
+                self.jobs.enqueue(SCH.RESEARCH_CYCLE, idempotency_key=SCH.OUTCOME_DISCOVERY_KEY)
 
         # Closed market starts by finding today's best available trades from the
         # latest completed official session. Once fresh discovery is ready, the

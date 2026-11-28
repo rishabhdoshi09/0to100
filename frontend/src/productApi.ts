@@ -1884,6 +1884,19 @@ export type ResearchDirectorStatus = {
     }
   }
   research_health?: {
+    outcome_discovery?: {
+      name: string
+      status: string
+      rationale?: string
+      pending: number
+      completed: number
+      elapsed_seconds?: number
+      next?: string
+      metrics?: {
+        expected_net_return?: number | null
+        excess_inference?: { mean?: number | null; ci95?: [number, number] | null; reason?: string }
+      }
+    } | null
     knowledge_growth?: Record<string, unknown>
     edge_health?: Record<string, unknown>
     gate_scorecard?: Array<Record<string, unknown>>

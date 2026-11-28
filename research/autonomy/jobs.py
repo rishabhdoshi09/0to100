@@ -1731,6 +1731,23 @@ def run_learning_cycle(ctx) -> JobResult:
 def run_research_cycle(ctx) -> JobResult:
     job = getattr(ctx, "job", None)
     key = str(getattr(job, "idempotency_key", "") or "")
+    if key == SCH.OUTCOME_DISCOVERY_KEY:
+        from research.autonomy.outcome_discovery import configured_checkpoint, run
+
+        try:
+            checkpoint = configured_checkpoint()
+            if checkpoint is None:
+                return JobResult(JS.PERMANENT_FAILED, "isolated discovery is unconfigured",
+                                 error_code="DISCOVERY_UNCONFIGURED")
+            result = run(checkpoint)
+        except (ValueError, FileNotFoundError) as exc:
+            return JobResult(JS.PERMANENT_FAILED, "discovery input refused",
+                             error_code="DISCOVERY_INPUT_REFUSED", error_message=str(exc))
+        except Exception as exc:
+            return JobResult(JS.RETRYABLE_FAILED, "discovery failed",
+                             error_code="DISCOVERY_ERROR", error_message=str(exc))
+        return JobResult(JS.SUCCEEDED, f"discovery: {result['status']}", metadata=result)
+
     historical = key.startswith("hist_research:")
     batch_id = str(getattr(job, "input_snapshot_id", "") or "") if historical else ""
     historical_stage: dict[str, Any] = {}

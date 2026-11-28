@@ -25,6 +25,8 @@ section, never an exception — mission control must render even when a feed is 
 """
 from __future__ import annotations
 
+import json
+
 
 def _safe(fn, default):
     try:
@@ -63,6 +65,7 @@ def research_health() -> dict:
         "experiments_rejected": experiments["rejected"],
         "recently_rejected_hypotheses": experiments["recent_rejected"][:5],
         "beliefs_overdue_review": len(overdue),
+        "outcome_discovery": experiments.get("outcome_discovery"),
         "calibration": calib,
     }
 
@@ -73,7 +76,21 @@ def _experiments() -> dict:
     registered = [e for e in allx if e.get("status") == "REGISTERED"]
     promoted = [e for e in allx if e.get("status") == "PROMOTED"]
     rejected = [e for e in allx if e.get("status") == "REJECTED"]
+    discovery = [e for e in allx if json.loads(e.get("data_window") or "{}").get("stage") == "DISCOVERY"]
+    latest = None
+    if discovery:
+        row = discovery[0]
+        protocol = json.loads(row["data_window"])
+        result = json.loads(row.get("result") or "{}")
+        latest = {
+            "name": row["name"], "status": row["status"], "rationale": protocol.get("motivation"),
+            "pending": sum(e["status"] == "REGISTERED" for e in discovery),
+            "completed": sum(bool(e.get("result")) for e in discovery),
+            "next": result.get("next"), "elapsed_seconds": result.get("elapsed_seconds"),
+            "metrics": result.get("metrics", {}),
+        }
     return {"registered": len(registered), "promoted": len(promoted),
+            "outcome_discovery": latest,
             "rejected": len(rejected),
             "recent_rejected": [e.get("name", "") for e in rejected]}
 
