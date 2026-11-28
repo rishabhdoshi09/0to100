@@ -1731,7 +1731,7 @@ def run_learning_cycle(ctx) -> JobResult:
 def run_research_cycle(ctx) -> JobResult:
     job = getattr(ctx, "job", None)
     key = str(getattr(job, "idempotency_key", "") or "")
-    if key == SCH.OUTCOME_DISCOVERY_KEY or key.startswith(SCH.OUTCOME_PROGRAMME_PREFIX):
+    if key == SCH.OUTCOME_DISCOVERY_KEY or key.startswith((SCH.OUTCOME_PROGRAMME_PREFIX, SCH.OUTCOME_FRONTIER_PREFIX)):
         from research.autonomy.outcome_discovery import configured_checkpoint, run
 
         try:
@@ -1739,8 +1739,16 @@ def run_research_cycle(ctx) -> JobResult:
             if checkpoint is None:
                 return JobResult(JS.PERMANENT_FAILED, "isolated discovery is unconfigured",
                                  error_code="DISCOVERY_UNCONFIGURED")
-            slot = int(key.removeprefix(SCH.OUTCOME_PROGRAMME_PREFIX)) if key != SCH.OUTCOME_DISCOVERY_KEY else None
-            result = run(checkpoint, programme_slot=slot)
+            if key.startswith(SCH.OUTCOME_FRONTIER_PREFIX):
+                from research.autonomy.frontier_discovery import configured_archive, run as run_frontier
+
+                archive = configured_archive()
+                if archive is None:
+                    raise ValueError("Isolated frontier archive is unconfigured")
+                result = run_frontier(checkpoint, archive, int(key.removeprefix(SCH.OUTCOME_FRONTIER_PREFIX)))
+            else:
+                slot = int(key.removeprefix(SCH.OUTCOME_PROGRAMME_PREFIX)) if key != SCH.OUTCOME_DISCOVERY_KEY else None
+                result = run(checkpoint, programme_slot=slot)
         except (ValueError, FileNotFoundError) as exc:
             return JobResult(JS.PERMANENT_FAILED, "discovery input refused",
                              error_code="DISCOVERY_INPUT_REFUSED", error_message=str(exc))

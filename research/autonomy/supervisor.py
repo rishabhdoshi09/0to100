@@ -319,7 +319,7 @@ class Supervisor:
                         or key.startswith("hist_research:")
                         or key.startswith("research_replan:")
                         or key == SCH.OUTCOME_DISCOVERY_KEY
-                        or key.startswith(SCH.OUTCOME_PROGRAMME_PREFIX)
+                        or key.startswith((SCH.OUTCOME_PROGRAMME_PREFIX, SCH.OUTCOME_FRONTIER_PREFIX))
                     )
                 elif job.job_type == SCH.HISTORICAL_PAPER_CYCLE:
                     retire = not key.startswith("hist_paper:")
@@ -957,6 +957,9 @@ class Supervisor:
 
                 try:
                     key = scheduler_key()
+                    if not key and os.environ.get("QT_FRONTIER_ARCHIVE"):
+                        from research.autonomy.frontier_discovery import scheduler_key as frontier_key
+                        key = frontier_key()
                 except ValueError as exc:
                     self._incident("DISCOVERY_PROGRAMME_BLOCKED", str(exc))
                 else:

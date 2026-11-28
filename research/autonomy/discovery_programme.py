@@ -90,8 +90,6 @@ def scheduler_key():
 
 
 def _measure(connection, days, symbols, spec):
-    from scipy.stats import spearmanr, t
-
     ordinals = {day: i for i, day in enumerate(days)}
     by_day = defaultdict(list)
     count = 0
@@ -116,9 +114,16 @@ def _measure(connection, days, symbols, spec):
         by_day[day].append((score, symbol, target, momentum, bool(f["signals"])))
 
     gap = spec.target == "next_open_gap"
+    return summarize(by_day, ordinals, count, 1 if gap else base.HORIZON, gap=gap)
+
+
+def summarize(by_day, ordinals, count, horizon, *, gap=False, trials=BUDGET, incremental=False):
+    from scipy.stats import spearmanr, t
+
     cells, sensitivity, payoff, benchmark, correlation = {}, {}, [], [], []
     quantiles = [[] for _ in range(5)]
     regimes, periods = defaultdict(list), defaultdict(list)
+    adjusted_rank = []
     names = no_signal = excluded = missing = 0
     for day, entries in by_day.items():
         ranked = sorted(entries, key=lambda row: (row[0], row[1]))
@@ -150,18 +155,25 @@ def _measure(connection, days, symbols, spec):
                 bucket.append(mean(values) - (0 if gap else COST))
         scores, targets = [r[0] for r in measured], [r[2] for r in measured]
         if len(set(scores)) > 1 and len(set(targets)) > 1:
-            correlation.append(float(spearmanr(scores, targets).statistic))
+            rho = float(spearmanr(scores, targets).statistic)
+            correlation.append(rho)
+            momentum = [r[3] for r in measured]
+            if incremental and len(set(momentum)) > 1:
+                sx = float(spearmanr(scores, momentum).statistic)
+                sy = float(spearmanr(targets, momentum).statistic)
+                scale = math.sqrt(max(0.0, (1 - sx*sx) * (1 - sy*sy)))
+                if scale > 1e-8:
+                    adjusted_rank.append(max(-1., min(1., (rho - sx*sy) / scale)))
         regimes["nonnegative" if median(r[3] for r in ranked) >= 0 else "negative"].append(excess)
         periods[day[:4]].append(excess)
         names += len(measured)
         no_signal += sum(not r[4] for r in measured)
 
-    horizon = 1 if gap else base.HORIZON
     inference = overlap_robust_test(cells, horizon)
     conservative = overlap_robust_test(sensitivity, horizon)
     lower = None
     if inference["status"] == conservative["status"] == "OK":
-        lower = min(item["mean"] - float(t.ppf(1 - 0.05 / BUDGET, item["df"])) * item["se"]
+        lower = min(item["mean"] - float(t.ppf(1 - 0.05 / trials, item["df"])) * item["se"]
                     for item in (inference, conservative))
     return {
         "observations_read": count, "eligible_observations_measured": names, "without_scanner_signals": no_signal,
@@ -171,6 +183,8 @@ def _measure(connection, days, symbols, spec):
         "net_return_stress": mean(payoff) + COST - STRESS_COST if payoff and not gap else None,
         "quintiles": [mean(values) if values else None for values in quantiles],
         "formation_return_rank_correlation": mean(correlation) if correlation else None,
+        **({"partial_rank_given_momentum": mean(adjusted_rank) if adjusted_rank else None}
+           if incremental else {}),
         "regime_excess": {k: {"sessions": len(v), "mean_excess": mean(v)} for k, v in regimes.items()},
         "year_excess": {k: {"sessions": len(v), "mean_excess": mean(v)} for k, v in periods.items()},
         "excess_inference": inference, "adverse_censoring_scenario": conservative,

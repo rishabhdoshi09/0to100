@@ -126,7 +126,7 @@ def validate(symbols=None, sample: int = 150, factors_enabled: bool = False) -> 
     return {"ok": not failed, "checks": checks, "failed": failed}
 
 
-def scoped_equity_frames(archives, symbols, actions):
+def scoped_equity_frames(archives, symbols, actions, *, bridge_share_actions=False):
     """Audit named NSE cash stocks against each expected regular-session file.
 
     Missing sessions and suspect bars break both the feature warm-up and the
@@ -145,6 +145,12 @@ def scoped_equity_frames(archives, symbols, actions):
               "close": "CLOSE_PRICE", "volume": "TTL_TRD_QNTY", "prev": "PREV_CLOSE"}
     active_actions = {symbol: {item["ex_date"].date() for item in actions.get(symbol, ())}
                       for symbol in symbols}
+    action_rows = {symbol: defaultdict(list) for symbol in symbols}
+    if bridge_share_actions:
+        for symbol in symbols:
+            for item in actions.get(symbol, ()):
+                action_rows[symbol][item["ex_date"].date()].append(item)
+    bridged = 0
     exclusions = defaultdict(Counter)
     rows = defaultdict(list)
     previous = {}
@@ -175,7 +181,7 @@ def scoped_equity_frames(archives, symbols, actions):
                           else "other_series" if records else "absent_from_archive")
             elif len(eq) != 1:
                 reason = "duplicate_EQ_bar"
-            elif day in active_actions[symbol]:
+            elif day in active_actions[symbol] and not bridge_share_actions:
                 reason = "documented_corporate_action"
             else:
                 try:
@@ -183,7 +189,30 @@ def scoped_equity_frames(archives, symbols, actions):
                 except (KeyError, TypeError, ValueError):
                     bar = {}
                 prior = previous.get(symbol)
-                if (not bar or not all(math.isfinite(v) and v > 0 for v in bar.values())
+                factor = 1.0
+                event = action_rows[symbol].get(day) if bridge_share_actions else None
+                if event:
+                    if (len(event) == 1 and event[0]["type"] in {"split", "bonus", "consolidation"}
+                            and math.isfinite(event[0]["factor"]) and event[0]["factor"] > 0
+                            and prior is not None and bar and bar["prev"] > 0):
+                        candidate = event[0]["factor"]
+                        adjusted = prior / candidate
+                        raw_reference = math.isclose(prior, bar["prev"], rel_tol=1e-6, abs_tol=0.05)
+                        adjusted_reference = math.isclose(adjusted, bar["prev"], rel_tol=1e-6, abs_tol=0.05)
+                        corroborated = all(abs(bar[k] / adjusted - 1) < 0.25
+                                           for k in ("open", "high", "low", "close"))
+                        closer_to_adjusted = (abs(bar["open"] / adjusted - 1)
+                                              < abs(bar["open"] / prior - 1))
+                        if (adjusted_reference or (raw_reference and closer_to_adjusted)) and corroborated:
+                            factor = candidate
+                            prior = bar["prev"] = adjusted
+                        else:
+                            reason = "unbridged_corporate_action"
+                    else:
+                        reason = "unbridged_corporate_action"
+                if reason:
+                    pass
+                elif (not bar or not all(math.isfinite(v) and v > 0 for v in bar.values())
                         or not bar["low"] <= min(bar["open"], bar["close"])
                         <= max(bar["open"], bar["close"]) <= bar["high"]):
                     reason = "invalid_OHLCV_or_reference"
@@ -197,6 +226,9 @@ def scoped_equity_frames(archives, symbols, actions):
                 continue
             previous[symbol] = bar["close"]
             del bar["prev"]
+            if bridge_share_actions:
+                bar["share_factor"] = factor
+                bridged += factor != 1.0
             try:
                 delivery = float(eq[0].get("DELIV_PER"))
             except (TypeError, ValueError):
@@ -219,4 +251,5 @@ def scoped_equity_frames(archives, symbols, actions):
         "quarantined_by_symbol": {s: dict(c) for s, c in exclusions.items()},
         "admitted_bars": sum(map(len, frames.values())),
         "symbols_with_bars": len(frames),
+        **({"bridged_share_actions": bridged} if bridge_share_actions else {}),
     }
