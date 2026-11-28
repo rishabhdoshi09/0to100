@@ -235,6 +235,8 @@ def _advance(slot, connection, days, symbols, legacy_row, source_hash, verify_so
     try:
         metrics = _measure(connection, days, symbols, spec)
     except (ArithmeticError, KeyError, ValueError) as exc:
+        if not verify_source():
+            raise ValueError("Gauntlet snapshot changed during discovery") from exc
         result = {
             "hypothesis_id": hid, "status": "INCONCLUSIVE", "failure": str(exc),
             "source_sha256": source_hash, "code_sha256": _code_hash(),
