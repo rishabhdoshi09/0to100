@@ -48,6 +48,7 @@ def _selection_policy_identity() -> dict[str, Any]:
             ACTIVE,
             ELIGIBLE,
             EXPERIMENTAL,
+            HISTORICAL_COMPARISON_SOURCE,
             load_policies,
         )
 
@@ -60,6 +61,8 @@ def _selection_policy_identity() -> dict[str, Any]:
             if status not in accepted:
                 continue
             source = str(raw.get("evidence_source") or "")
+            if source == HISTORICAL_COMPARISON_SOURCE:
+                continue
             effective_status = ELIGIBLE if source.startswith("backtest") and status == ACTIVE else status
             dimension = str(raw.get("dimension") or "")
             bucket = str(raw.get("bucket") or "")
@@ -112,24 +115,25 @@ def _selection_policy_identity() -> dict[str, Any]:
         }
 
 
-def manifest() -> dict[str, Any]:
+def manifest(*, include_active_selection: bool = True) -> dict[str, Any]:
     from product.pit_versions import current_versions
     from product.strategy_catalog import ensemble_identity
 
     ensemble = ensemble_identity()
     learner: dict[str, Any] = {}
-    try:
-        from product.challenger_learning import dashboard
-        current = dict((dashboard() or {}).get("current") or {})
-        if str(current.get("status") or "") == "PAPER_ACTIVE":
-            learner = {
-                "status": "PAPER_ACTIVE",
-                "model_version": str(current.get("model_version") or ""),
-                "promotion_reason": str(current.get("promotion_reason") or ""),
-                "affects_selection": True,
-            }
-    except Exception:
-        learner = {}
+    if include_active_selection:
+        try:
+            from product.challenger_learning import dashboard
+            current = dict((dashboard() or {}).get("current") or {})
+            if str(current.get("status") or "") == "PAPER_ACTIVE":
+                learner = {
+                    "status": "PAPER_ACTIVE",
+                    "model_version": str(current.get("model_version") or ""),
+                    "promotion_reason": str(current.get("promotion_reason") or ""),
+                    "affects_selection": True,
+                }
+        except Exception:
+            learner = {}
 
     payload = {
         "objective_id": OBJECTIVE_ID,
@@ -144,7 +148,7 @@ def manifest() -> dict[str, Any]:
         "rules_hash": ensemble.get("rules_hash"),
         "decision_versions": current_versions().as_dict(),
         "active_selection_learner": learner,
-        "selection_policy_set": _selection_policy_identity(),
+        "selection_policy_set": _selection_policy_identity() if include_active_selection else {},
         "hard_invariants": [
             "hard risk and evidence vetoes remain authoritative",
             "historical-only evidence cannot promote production selection",

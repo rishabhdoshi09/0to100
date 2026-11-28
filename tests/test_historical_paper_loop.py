@@ -25,7 +25,7 @@ def test_policy_comparison_isolated_learning_and_crash_resume(tmp_path, monkeypa
 
     monkeypatch.setattr("risk.portfolio_risk.account_exposure_gate", external_read)
     monkeypatch.setattr("product.challenger_learning.paper_selection_adjustment", external_read)
-    days = [f"2025-04-{n:02}" for n in (1, 2, 3, 4, 7, 8, 9)]
+    days = [f"2025-04-{n:02}" for n in (1, 2, 3, 4, 7, 8, 9, 10)]
     good, bad = "TCS", "INFY"
     rows = []
     def decision(day, symbol):
@@ -34,19 +34,19 @@ def test_policy_comparison_isolated_learning_and_crash_resume(tmp_path, monkeypa
         return {"decision": "BUY", "symbol": symbol, "as_of": day, "setup": setup,
                 "regime": "RISK_ON", "target": card["target"], "selection_card": card}
 
-    rows.extend(decision(d, symbol) for d, symbol in zip(days, (good, good, bad, bad)))
-    rows.extend([decision(days[4], good), decision(days[4], bad)])
-    win, loss = (100, 116, 98, 115), (85, 90, 83, 88)
+    rows.extend(decision(d, symbol) for d, symbol in zip(days, (good, good, bad, bad, bad)))
+    rows.extend([decision(days[5], good), decision(days[5], bad)])
+    win, loss = (100, 116, 98, 115), (100, 101, 83, 88)
     bars = {d: {good: win, bad: loss} for d in days}
     if reversal:
-        bars[days[5]][bad] = win
+        bars[days[6]][bad] = win
     floors = dict(experimental=2, eligible=2, active=2, sessions_eligible=2, sessions_active=2)
     options = dict(official_sessions=days, bars=bars, synthetic=True, floors=floors)
     original = json.dumps(rows, sort_keys=True)
     checkpoint = HPL._HistoricalPolicyComparison.save
 
     def interrupted(branch, payload):
-        if branch.adaptive and payload["session"] == days[4]:
+        if branch.adaptive and payload["session"] == days[5]:
             raise OSError("interrupted after learning and decision freeze")
         return checkpoint(branch, payload)
 
@@ -60,7 +60,7 @@ def test_policy_comparison_isolated_learning_and_crash_resume(tmp_path, monkeypa
     assert repaired["comparison"] == clean["comparison"]
     assert repaired["branches"]["ADAPTIVE"]["trades"] == clean["branches"]["ADAPTIVE"]["trades"]
     changed = repaired["comparison"]["decisions_changed"]
-    assert {r["symbol"]: r["effect"] for r in changed if r["day"] == days[4]} == {good: "SUPPORT", bad: "BLOCK"}
+    assert {r["symbol"]: r["effect"] for r in changed if r["day"] == days[5]} == {good: "SUPPORT", bad: "BLOCK"}
     assert (repaired["comparison"]["adaptive_minus_frozen_pct"] < 0) == reversal
     assert all(not r["affects_selection"] and r["production_status"] != "ACTIVE"
                for r in load_policies(tmp_path / "resumed/ADAPTIVE/policies.json")["policies"])
@@ -72,6 +72,68 @@ def test_policy_comparison_isolated_learning_and_crash_resume(tmp_path, monkeypa
                  "affects_selection": True, "expectancy_difference_R": 2, "sample_size": 40}
     assert evaluate_policies({"setup_label": "positive-control"}, policies=[simulated])["final_effect"] == "NEUTRAL"
     assert repaired["comparison"]["ADAPTIVE"]["paired_positive_rejection_rate"] == float(reversal)
+
+
+@pytest.mark.parametrize(("next_bar", "status", "reason"), [
+    ((97, 99, 96, 98), "NO_FILL", None),
+    ((102, 116, 94, 110), "FILLED", "LOSS"),
+    ((117, 119, 116, 118), "FILLED", "SCRATCH"),
+    ((114.99, 114.995, 114.9, 114.95), "FILLED", "SCRATCH"),
+    (None, "UNAVAILABLE", None),
+])
+def test_comparison_executes_only_next_session(tmp_path, monkeypatch, next_bar, status, reason):
+    from tests.test_paper_autopilot_money_path import _eligible_card
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    days = ["2025-04-01", "2025-04-02", "2025-04-03"]
+    row = {"decision": "BUY", "symbol": "TCS", "as_of": days[0], "regime": "RISK_ON",
+           "selection_card": _eligible_card()}
+    # A signal-day high and a later trigger cannot fill the intervening order.
+    bars = {day: {"TCS": (100, 116, 97, 115)} for day in days}
+    bars[days[1]] = {"TCS": next_bar} if next_bar else {}
+    output = HPL.compare_historical_policies(
+        [row], official_sessions=days, bars=bars, directory=tmp_path / "comparison", synthetic=True,
+    )
+    for branch in output["branches"].values():
+        assert [o["status"] for o in branch["orders"]] == [status]
+        assert branch["orders"][0]["execution_date"] == days[1]
+        assert [t["exit_reason"] for t in branch["trades"]] == ([reason] if reason else [])
+        assert branch["book"]["equity_curve"][1:] == [row["equity"] for row in branch["daily"]]
+        if reason:
+            trade, = branch["trades"]
+            assert trade["entry_price"] == pytest.approx(next_bar[0] * 1.0003)
+            assert trade["net_pnl"] < 0
+
+
+def test_bound_thesis_does_not_read_active_selection(monkeypatch):
+    from product import trading_thesis
+
+    reads = []
+    def forbidden():
+        reads.append(True)
+        raise AssertionError("present-day state accessed")
+
+    monkeypatch.setattr(trading_thesis, "_selection_policy_identity", forbidden)
+    monkeypatch.setattr("product.challenger_learning.dashboard", forbidden)
+    thesis = trading_thesis.manifest(include_active_selection=False)
+    assert thesis["active_selection_learner"] == {}
+    assert thesis["selection_policy_set"] == {}
+    assert reads == []
+
+
+def test_simulated_policy_does_not_change_production_thesis_identity(monkeypatch):
+    from product import learning_policy_store, trading_thesis
+
+    monkeypatch.setattr(learning_policy_store, "load_policies", lambda: {"policies": []})
+    baseline = trading_thesis._selection_policy_identity()
+    comparison = {
+        "policy_id": "simulated", "dimension": "setup", "bucket": "example",
+        "evidence_source": learning_policy_store.HISTORICAL_COMPARISON_SOURCE,
+        "production_status": "ACTIVE", "confidence": "MEASURED",
+        "affects_selection": True, "expectancy_difference_R": 2.0,
+    }
+    monkeypatch.setattr(learning_policy_store, "load_policies", lambda: {"policies": [comparison]})
+    assert trading_thesis._selection_policy_identity() == baseline
 
 
 def test_comparison_refuses_reserve_future_inputs_and_unsafe_path(tmp_path, monkeypatch):

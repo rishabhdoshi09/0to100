@@ -442,8 +442,10 @@ def decide_session(
     versions = current_versions().as_dict()
     try:
         from product.trading_thesis import manifest as thesis_manifest
-        thesis = thesis_manifest()
+        thesis = thesis_manifest(include_active_selection=False) if bind_selection_card else thesis_manifest()
     except Exception:
+        if bind_selection_card:
+            raise
         thesis = {}
     out: list[dict[str, Any]] = []
     for card in cards:

@@ -571,6 +571,8 @@ def simulate_paper_book_sequence(
     rejections: list[dict[str, Any]] = []
     decisions_made = []
     daily = []
+    pending = []
+    orders = []
     current = ""
     if _comparison is not None:
         saved = _comparison.load()
@@ -580,15 +582,20 @@ def simulate_paper_book_sequence(
             rejections = saved["rejections"]
             decisions_made = saved["decisions"]
             daily = saved["daily"]
+            pending = saved["pending"]
+            orders = saved["orders"]
             current = saved["session"]
 
     def checkpoint(day):
         if _comparison is not None:
-            daily.append({"day": day, "equity": book.equity(_comparison.bars.get(day, {})),
+            equity = book.equity(_comparison.bars.get(day, {}))
+            book.equity_curve[len(daily) + 1:] = [equity]
+            daily.append({"day": day, "equity": equity,
                           "deployed": sum(p.entry_price * p.qty for p in book.open.values()),
                           "open_risk": sum(p.risk_amount for p in book.open.values())})
             _comparison.save({"session": day, "book": book.snapshot(), "sources": source_by_intent,
-                              "rejections": rejections, "decisions": decisions_made, "daily": daily})
+                              "rejections": rejections, "decisions": decisions_made, "daily": daily,
+                              "pending": pending, "orders": orders})
 
     for day in sessions:
         if day <= current:
@@ -605,10 +612,31 @@ def simulate_paper_book_sequence(
                     raise ValueError(f"Missing held-symbol archive bar: {pos.symbol} on {day}")
             if bar is not None:
                 bars[str(pos.symbol).upper()] = bar
-        if bars:
-            closed_today = book.mark(bars, day, allow_entry_session=False)
-            if _comparison is not None:
-                _comparison.learn(closed_today, source_by_intent, day)
+        if _comparison is not None:
+            fills, outcomes = _comparison.execute_pending(book, pending, day, horizon)
+            pending.clear()
+            orders.extend(outcomes)
+            # Stage all fills against prior-close resources before crediting
+            # any proceeds from today's exits. No intraday sequencing is known.
+            entry_session_exits = []
+            for order, pos, bar, result in fills:
+                source_by_intent[pos.paper_intent_id] = order["source"]
+                if result.outcome == "LOSS":
+                    entry_session_exits.append((pos, result.exit_price, "LOSS"))
+                elif pos.entry_price >= pos.target_price:
+                    entry_session_exits.append((pos, result.fill_price, "SCRATCH"))
+                elif result.outcome == "FLAT":
+                    bars[pos.symbol] = (result.fill_price, *bar[1:])
+                else:
+                    entry_session_exits.append((pos, result.exit_price, result.outcome))
+            closed_today = book.mark(bars, day)
+            for pos, exit_price, reason in entry_session_exits:
+                closed_today.append(book._close(
+                    (pos.strategy_id, pos.symbol), pos, exit_price, reason, day,
+                ))
+            _comparison.learn(closed_today, source_by_intent, day)
+        elif bars:
+            book.mark(bars, day, allow_entry_session=False)
 
         raw_day = candidates.get(day) or []
         if not raw_day:
@@ -702,6 +730,15 @@ def simulate_paper_book_sequence(
                 f"{row.get('thesis_hash')}|{day}|{decision.symbol}|{row.get('canonical_decision_id')}".encode("utf-8")
             ).hexdigest()[:20]
             qty = int(_f(decision.card.get("approved_quantity")) or 0)
+            if _comparison is not None:
+                pending.append({
+                    "symbol": decision.symbol, "decision_day": day, "source": row,
+                    "entry": decision.card["entry"], "stop": decision.card["stop"],
+                    "target": decision.card["target"], "quantity": qty,
+                    "sector": decision.card.get("sector") or row.get("sector") or "",
+                    "freeze_id": day_decisions[decision.symbol]["freeze_id"], "intent": intent_id,
+                })
+                continue
             pos = book.open_position(
                 ENSEMBLE_ID,
                 decision.symbol,
@@ -712,8 +749,7 @@ def simulate_paper_book_sequence(
                 int(horizon),
                 risk_pct_of_capital=DEFAULT_RISK_PCT,
                 quantity=(qty if qty > 0 else None),
-                decision_id=(day_decisions[decision.symbol]["freeze_id"] if _comparison is not None
-                             else str(row.get("canonical_decision_id") or "")),
+                decision_id=str(row.get("canonical_decision_id") or ""),
                 paper_intent_id=intent_id,
                 context_key=str(row.get("context_key") or ""),
             )
@@ -735,9 +771,6 @@ def simulate_paper_book_sequence(
             family_risk[family] = family_risk.get(family, 0.0) + DEFAULT_RISK_PCT
             cluster_risk[family] = cluster_risk.get(family, 0.0) + DEFAULT_RISK_PCT
             source_by_intent[intent_id] = dict(row)
-
-            if _comparison is not None:
-                continue
 
             future = list(
                 later_bars_fn(decision.symbol, day, horizon=int(horizon)) or []
@@ -769,6 +802,7 @@ def simulate_paper_book_sequence(
             "trade_id": trade_id,
             "symbol": str(closed.symbol or "").upper(),
             "entry_date": str(closed.entry_date or "")[:10],
+            **({"decision_date": source["as_of"]} if _comparison is not None else {}),
             "exit_date": str(closed.exit_date or "")[:10],
             "entry_price": round(float(closed.entry_price), 6),
             "stop_price": round(float(closed.stop_price), 6),
@@ -804,7 +838,8 @@ def simulate_paper_book_sequence(
         "open_unresolved": len(book.open),
         "book": book.snapshot(),
         "execution_model": "PaperBook",
-        **({"decisions": decisions_made, "daily": daily} if _comparison is not None else {}),
+        **({"decisions": decisions_made, "daily": daily,
+             "orders": orders, "pending_orders": pending} if _comparison is not None else {}),
         "slippage_bps": 3.0,
         "cost_model": "india_cash_costs",
     }
@@ -831,15 +866,60 @@ class _HistoricalPolicyComparison:
 
         atomic_write_text(self.checkpoint, json.dumps(payload, sort_keys=True, allow_nan=False), durable=True)
 
+    def execute_pending(self, book, pending, day, horizon):
+        from core.evaluation_spec import simulate_trade
+        from product.paper_autopilot import DEFAULT_RISK_PCT
+        from product.strategy_catalog import ENSEMBLE_ID
+        from research.intelligence.runtime.position_sizing import size_long_cash
+
+        fills = []
+        outcomes = []
+        for order in pending:
+            symbol = order["symbol"]
+            bar = self.bars.get(day, {}).get(symbol)
+            event = {"decision_date": order["decision_day"], "execution_date": day, "symbol": symbol}
+            if bar is None:
+                outcomes.append({**event, "status": "UNAVAILABLE"})
+                continue
+            op, high, low, close = bar
+            result = simulate_trade(order["entry"], order["stop"], order["target"],
+                                    [high], [low], [close], opens=[op])
+            if not result.filled:
+                outcomes.append({**event, "status": "NO_FILL"})
+                continue
+            sizing = size_long_cash(
+                capital=book.risk_capital(), entry=result.fill_price, stop=order["stop"],
+                requested_risk_pct=DEFAULT_RISK_PCT, max_risk_fraction=book.risk_per_trade_pct,
+                max_position_fraction=book.max_position_pct, slippage_bps=book.slippage_bps,
+            )
+            if not sizing.ok:
+                outcomes.append({**event, "status": "RISK_REFUSED", "reason": sizing.reason_code})
+                continue
+            approved_risk = order["quantity"] * (order["entry"] * (1 + book.slippage_bps / 1e4) - order["stop"])
+            quantity = min(order["quantity"], sizing.quantity, math.floor((approved_risk + 1e-9) / sizing.risk_per_share))
+            pos = book.open_position(
+                ENSEMBLE_ID, symbol, result.fill_price, order["stop"], order["target"], day, horizon,
+                risk_pct_of_capital=DEFAULT_RISK_PCT, quantity=quantity,
+                decision_id=order["freeze_id"], paper_intent_id=order["intent"],
+                context_key=str(order["source"].get("context_key") or ""),
+            )
+            if pos is None:
+                outcomes.append({**event, "status": "RISK_REFUSED", "reason": book.refusals[-1][1]})
+                continue
+            pos.sector = str(order["sector"])
+            fills.append((order, pos, bar, result))
+            outcomes.append({**event, "status": "FILLED", "price": pos.entry_price})
+        return fills, outcomes
+
     def learn(self, trades, sources, day):
         from product.learning_policy_store import record_measured_outcome
 
         if not self.adaptive:
             return
         for trade in trades:
-            if not trade.entry_date < trade.exit_date == day:
-                raise ValueError("Only matured prior-session trades can update the comparison")
             source = sources[trade.paper_intent_id]
+            if not source["as_of"] < trade.entry_date <= trade.exit_date == day:
+                raise ValueError("Only matured trades from earlier decisions can update the comparison")
             card = source["selection_card"]
             setup = str(card.get("setup_label") or card.get("primary_thesis") or "")
             if setup:
@@ -897,6 +977,9 @@ def _comparison_metrics(branches, horizon):
         traded += sum(t["entry_price"] * t["qty"] for t in result["book"]["open"])
         return {
             "settled_trades": len(trades), "unresolved_trades": result["open_unresolved"],
+            "order_outcomes": {status: sum(o["status"] == status for o in result["orders"])
+                               for status in ("FILLED", "NO_FILL", "RISK_REFUSED", "UNAVAILABLE")},
+            "pending_orders": len(result["pending_orders"]),
             "mean_net_R": sum(t["realized_R"] for t in trades) / len(trades) if trades else None,
             "mean_net_return_pct": sum(t["return_pct"] for t in trades) / len(trades) if trades else None,
             "portfolio_return_pct": (last / capital - 1) * 100,
@@ -925,7 +1008,7 @@ def _comparison_metrics(branches, horizon):
 
     for name, other, decisions in (("FROZEN", "ADAPTIVE", fixed), ("ADAPTIVE", "FROZEN", adaptive_choices)):
         omitted = [t for t in branches[other]["trades"]
-                   if decisions[(t["entry_date"], t["symbol"])]["decision"] != ENTER_NOW]
+                   if decisions[(t["decision_date"], t["symbol"])]["decision"] != ENTER_NOW]
         out[name]["paired_rejection_observations"] = len(omitted)
         out[name]["paired_positive_rejection_rate"] = (
             sum(t["net_pnl"] > 0 for t in omitted) / len(omitted) if omitted else None)
@@ -965,6 +1048,15 @@ def compare_historical_policies(decisions, *, official_sessions, bars, directory
             or sessions[-1] >= "2025-11-01" or (floors is not None and not synthetic)
             or not 1 <= horizon <= DEFAULT_HORIZON_SESSIONS or not 1 <= max_new_per_session <= 3):
         raise ValueError("Invalid comparison chronology or reserved-period overlap")
+    if any(day not in sessions for day in bars):
+        raise ValueError("Execution bars fall outside the comparison sessions")
+    for day, prices in bars.items():
+        for symbol, bar in prices.items():
+            if len(bar) != 4 or not all(math.isfinite(x) and x > 0 for x in bar):
+                raise ValueError(f"Invalid OHLC for {symbol} on {day}")
+            op, high, low, close = bar
+            if not (low <= op <= high and low <= close <= high):
+                raise ValueError(f"Incoherent OHLC for {symbol} on {day}")
     rows = [dict(row) for row in decisions]
     seen = set()
     for row in rows:
@@ -994,6 +1086,8 @@ def compare_historical_policies(decisions, *, official_sessions, bars, directory
         expected = [day.isoformat() for day in days if calendar.is_session(day, holidays) or day.isoformat() in special]
         if expected != sessions:
             raise ValueError("Comparison requires every consecutive official session")
+        if any(day in special for day, _ in seen):
+            raise ValueError("Special-session decision timestamps are unverified")
         if rows:
             with closing(sqlite3.connect(paths[2].resolve().as_uri() + "?mode=ro", uri=True)) as reader:
                 for row in rows:
